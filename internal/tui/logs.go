@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,6 +22,15 @@ type LogsModel struct {
 	err       error
 	following bool
 	atBottom  bool // track if user is at the bottom
+
+	// Grep/filter
+	filtering       bool           // user is typing a search query
+	filterInput     string         // text being typed
+	filterTerm      string         // confirmed filter term
+	filterRegex     *regexp.Regexp // compiled regex (nil if invalid or plain text)
+	filterCaseSense bool           // true = case-sensitive
+	matchLines      []int          // indices of matching lines in l.lines
+	matchCursor     int            // current position in matchLines for n/N
 }
 
 // Messages
@@ -50,16 +60,75 @@ func (l *LogsModel) Show(podName, namespace, container string) {
 	l.err = nil
 	l.following = false
 	l.atBottom = true
+	l.filtering = false
+	l.filterInput = ""
+	l.filterTerm = ""
+	l.filterRegex = nil
+	l.filterCaseSense = false
+	l.matchLines = nil
+	l.matchCursor = 0
+}
+
+// HasActiveFilter returns true if the log viewer has a search filter active or being typed.
+func (l LogsModel) HasActiveFilter() bool {
+	return l.filtering || l.filterTerm != ""
+}
+
+// CancelFilter cancels filter input or clears the active filter.
+func (l *LogsModel) CancelFilter() {
+	if l.filtering {
+		l.filtering = false
+		l.filterInput = ""
+	} else if l.filterTerm != "" {
+		l.filterTerm = ""
+		l.filterRegex = nil
+		l.matchLines = nil
+		l.matchCursor = 0
+		l.offset = 0
+	}
+}
+
+func (l *LogsModel) compileFilter() {
+	prefix := "(?i)"
+	if l.filterCaseSense {
+		prefix = ""
+	}
+	re, err := regexp.Compile(prefix + l.filterTerm)
+	if err != nil {
+		// Invalid regex — fall back to escaped literal
+		re = regexp.MustCompile(prefix + regexp.QuoteMeta(l.filterTerm))
+	}
+	l.filterRegex = re
+}
+
+func (l *LogsModel) refilter() {
+	if l.filterTerm == "" {
+		l.matchLines = nil
+		l.filterRegex = nil
+		return
+	}
+	l.compileFilter()
+	l.matchLines = nil
+	for i, line := range l.lines {
+		if l.filterRegex.MatchString(line) {
+			l.matchLines = append(l.matchLines, i)
+		}
+	}
+	if l.matchCursor >= len(l.matchLines) {
+		l.matchCursor = max(0, len(l.matchLines)-1)
+	}
 }
 
 func (l *LogsModel) UpdateLogs(content string, err error) {
 	if err != nil {
 		l.err = err
 		l.lines = nil
+		l.matchLines = nil
 		return
 	}
 	l.err = nil
 	l.lines = strings.Split(content, "\n")
+	l.refilter()
 	// Auto-scroll to bottom
 	if l.atBottom {
 		l.offset = l.maxOffset()
@@ -71,6 +140,12 @@ func (l *LogsModel) AppendLine(line string) {
 	// Cap total lines to prevent unbounded memory growth
 	if len(l.lines) > maxLogLines {
 		l.lines = l.lines[len(l.lines)-maxLogLines:]
+		l.refilter() // indices shift after trimming
+	} else if l.filterRegex != nil {
+		// Check if new line matches the active filter
+		if l.filterRegex.MatchString(line) {
+			l.matchLines = append(l.matchLines, len(l.lines)-1)
+		}
 	}
 	// Auto-scroll if at bottom
 	if l.atBottom {
@@ -91,9 +166,77 @@ func (l *LogsModel) SetFollowing(f bool) {
 	}
 }
 
+func (l LogsModel) displayLineCount() int {
+	if l.filterTerm != "" {
+		return len(l.matchLines)
+	}
+	return len(l.lines)
+}
+
 func (l LogsModel) Update(msg tea.KeyMsg) LogsModel {
+	// Handle filter input mode
+	if l.filtering {
+		switch {
+		case msg.Type == tea.KeyEscape:
+			l.filtering = false
+			l.filterInput = ""
+		case msg.Type == tea.KeyBackspace:
+			if len(l.filterInput) > 0 {
+				l.filterInput = l.filterInput[:len(l.filterInput)-1]
+			}
+		case msg.Type == tea.KeyEnter:
+			l.filtering = false
+			if l.filterInput != "" {
+				l.filterTerm = l.filterInput
+				l.refilter()
+				l.offset = 0
+				l.atBottom = false
+			}
+			l.filterInput = ""
+		case msg.Type == tea.KeyTab:
+			l.filterCaseSense = !l.filterCaseSense
+		case msg.Type == tea.KeyRunes:
+			l.filterInput += string(msg.Runes)
+		}
+		return l
+	}
+
 	visibleLines := l.visibleLines()
+
 	switch msg.String() {
+	case "/":
+		l.filtering = true
+		l.filterInput = ""
+		return l
+	case "i":
+		if l.filterTerm != "" {
+			l.filterCaseSense = !l.filterCaseSense
+			l.refilter()
+			return l
+		}
+	case "n":
+		if l.filterTerm != "" && len(l.matchLines) > 0 {
+			l.matchCursor = (l.matchCursor + 1) % len(l.matchLines)
+			// Bring current match into view
+			if l.matchCursor < l.offset {
+				l.offset = l.matchCursor
+			} else if l.matchCursor >= l.offset+visibleLines {
+				l.offset = l.matchCursor - visibleLines + 1
+			}
+			l.atBottom = l.offset >= l.maxOffset()
+			return l
+		}
+	case "N":
+		if l.filterTerm != "" && len(l.matchLines) > 0 {
+			l.matchCursor = (l.matchCursor - 1 + len(l.matchLines)) % len(l.matchLines)
+			if l.matchCursor < l.offset {
+				l.offset = l.matchCursor
+			} else if l.matchCursor >= l.offset+visibleLines {
+				l.offset = l.matchCursor - visibleLines + 1
+			}
+			l.atBottom = l.offset >= l.maxOffset()
+			return l
+		}
 	case "up", "k":
 		if l.offset > 0 {
 			l.offset--
@@ -161,12 +304,45 @@ func (l LogsModel) View() string {
 	keyStyle := lipgloss.NewStyle().Foreground(colorPurple).Bold(true)
 	descStyle := lipgloss.NewStyle().Foreground(colorDimText)
 	helpBar := keyStyle.Render("esc") + descStyle.Render(" close") + sep +
-		keyStyle.Render("f") + descStyle.Render(" toggle follow") + sep +
+		keyStyle.Render("f") + descStyle.Render(" follow") + sep +
 		keyStyle.Render("j/k") + descStyle.Render(" scroll") + sep +
 		keyStyle.Render("G") + descStyle.Render(" bottom") + sep +
-		keyStyle.Render("g") + descStyle.Render(" top")
+		keyStyle.Render("g") + descStyle.Render(" top") + sep +
+		keyStyle.Render("/") + descStyle.Render(" grep")
 
-	bottomBar := helpBar + "    " + modeBadge
+	if l.filterTerm != "" {
+		helpBar += sep + keyStyle.Render("n/N") + descStyle.Render(" next/prev") +
+			sep + keyStyle.Render("i") + descStyle.Render(" toggle case")
+	}
+
+	// Case sensitivity label
+	var caseLabel string
+	if l.filterCaseSense {
+		caseLabel = lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render(" case-sensitive")
+	} else {
+		caseLabel = lipgloss.NewStyle().Foreground(colorDimText).Render(" case-insensitive")
+	}
+
+	// Build the bottom bar — replace with grep input when filtering
+	var bottomBar string
+	if l.filtering {
+		bottomBar = lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render("grep: ") +
+			lipgloss.NewStyle().Foreground(colorWhite).Render(l.filterInput+"█") +
+			caseLabel +
+			descStyle.Render("  (") + keyStyle.Render("tab") + descStyle.Render(" toggle)")
+	} else if l.filterTerm != "" {
+		grepInfo := lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render("grep: ") +
+			lipgloss.NewStyle().Foreground(colorWhite).Render(l.filterTerm) + caseLabel
+		if len(l.matchLines) > 0 {
+			grepInfo += lipgloss.NewStyle().Foreground(colorDimText).Render(
+				fmt.Sprintf("  [%d/%d matches]", l.matchCursor+1, len(l.matchLines)))
+		} else {
+			grepInfo += lipgloss.NewStyle().Foreground(colorDimText).Render("  (no matches)")
+		}
+		bottomBar = grepInfo + "    " + modeBadge
+	} else {
+		bottomBar = helpBar + "    " + modeBadge
+	}
 
 	if l.err != nil {
 		errContent := ErrorStyle.Render(fmt.Sprintf("Error: %s", l.err))
@@ -179,51 +355,101 @@ func (l LogsModel) View() string {
 	}
 
 	visibleLines := l.visibleLines()
-	end := min(l.offset+visibleLines, len(l.lines))
-	start := l.offset
-
 	var b strings.Builder
 	lineNumWidth := len(fmt.Sprintf("%d", len(l.lines)))
 	lineNumStyle := lipgloss.NewStyle().Foreground(colorDimText).Width(lineNumWidth + 1)
 	logLineStyle := lipgloss.NewStyle().Foreground(colorWhite)
 
-	for i := start; i < end; i++ {
-		lineNum := lineNumStyle.Render(fmt.Sprintf("%d", i+1))
-		line := l.lines[i]
-		// Truncate long lines
-		maxLineWidth := l.width - lineNumWidth - 6
-		if maxLineWidth > 0 && len(line) > maxLineWidth {
-			line = line[:maxLineWidth-3] + "..."
-		}
-		// Highlight warning/error lines
-		styled := logLineStyle.Render(line)
-		if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
-			styled = StyleFailed.Render(line)
-		} else if containsLogLevel(line, "warn", "WARN") {
-			styled = StyleWarning.Render(line)
-		}
-		b.WriteString(lineNum + " " + styled + "\n")
-	}
+	var scrollInfo string
 
-	// Scroll indicator
-	scrollInfo := lipgloss.NewStyle().Foreground(colorDimText).Render(
-		fmt.Sprintf("  line %d-%d of %d", start+1, end, len(l.lines)))
+	if l.filterTerm != "" {
+		// Filtered view — show only matching lines
+		if len(l.matchLines) == 0 {
+			b.WriteString(lipgloss.NewStyle().Foreground(colorDimText).Render("  No matches found"))
+		} else {
+			end := min(l.offset+visibleLines, len(l.matchLines))
+			start := l.offset
+
+			for i := start; i < end; i++ {
+				origIdx := l.matchLines[i]
+				lineNum := lineNumStyle.Render(fmt.Sprintf("%d", origIdx+1))
+				line := l.lines[origIdx]
+
+				maxLineWidth := l.width - lineNumWidth - 7
+				if maxLineWidth > 0 && len(line) > maxLineWidth {
+					line = line[:maxLineWidth-3] + "..."
+				}
+
+				// Style with match highlighting
+				var styled string
+				if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
+					styled = highlightMatches(line, l.filterRegex, StyleFailed)
+				} else if containsLogLevel(line, "warn", "WARN") {
+					styled = highlightMatches(line, l.filterRegex, StyleWarning)
+				} else {
+					styled = highlightMatches(line, l.filterRegex, logLineStyle)
+				}
+
+				// Mark current match with indicator
+				if i == l.matchCursor {
+					b.WriteString(lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render("▸") + lineNum + " " + styled + "\n")
+				} else {
+					b.WriteString(" " + lineNum + " " + styled + "\n")
+				}
+			}
+
+			scrollInfo = lipgloss.NewStyle().Foreground(colorDimText).Render(
+				fmt.Sprintf("  match %d-%d of %d", start+1, end, len(l.matchLines)))
+		}
+	} else {
+		// Normal view — show all lines
+		end := min(l.offset+visibleLines, len(l.lines))
+		start := l.offset
+
+		for i := start; i < end; i++ {
+			lineNum := lineNumStyle.Render(fmt.Sprintf("%d", i+1))
+			line := l.lines[i]
+
+			maxLineWidth := l.width - lineNumWidth - 6
+			if maxLineWidth > 0 && len(line) > maxLineWidth {
+				line = line[:maxLineWidth-3] + "..."
+			}
+
+			styled := logLineStyle.Render(line)
+			if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
+				styled = StyleFailed.Render(line)
+			} else if containsLogLevel(line, "warn", "WARN") {
+				styled = StyleWarning.Render(line)
+			}
+			b.WriteString(lineNum + " " + styled + "\n")
+		}
+
+		scrollInfo = lipgloss.NewStyle().Foreground(colorDimText).Render(
+			fmt.Sprintf("  line %d-%d of %d", start+1, end, len(l.lines)))
+	}
 
 	content := DetailBorderStyle.
 		Width(l.width - 6).
 		Height(visibleLines).
 		Render(b.String())
 
-	return lipgloss.JoinVertical(lipgloss.Left, "", title, content, scrollInfo, bottomBar)
+	parts := []string{"", title}
+	parts = append(parts, content)
+	if scrollInfo != "" {
+		parts = append(parts, scrollInfo)
+	}
+	parts = append(parts, bottomBar)
+
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (l LogsModel) visibleLines() int {
-	h := l.height - 7 // extra line for help bar
+	h := l.height - 7
 	return max(h, 1)
 }
 
 func (l LogsModel) maxOffset() int {
-	return max(len(l.lines)-l.visibleLines(), 0)
+	return max(l.displayLineCount()-l.visibleLines(), 0)
 }
 
 func containsLogLevel(line string, levels ...string) bool {
@@ -234,4 +460,34 @@ func containsLogLevel(line string, levels ...string) bool {
 		}
 	}
 	return false
+}
+
+func highlightMatches(line string, re *regexp.Regexp, baseStyle lipgloss.Style) string {
+	if re == nil {
+		return baseStyle.Render(line)
+	}
+
+	highlightStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("#FFAA00")).
+		Foreground(lipgloss.Color("#000000")).
+		Bold(true)
+
+	locs := re.FindAllStringIndex(line, -1)
+	if len(locs) == 0 {
+		return baseStyle.Render(line)
+	}
+
+	var result string
+	pos := 0
+	for _, loc := range locs {
+		if loc[0] > pos {
+			result += baseStyle.Render(line[pos:loc[0]])
+		}
+		result += highlightStyle.Render(line[loc[0]:loc[1]])
+		pos = loc[1]
+	}
+	if pos < len(line) {
+		result += baseStyle.Render(line[pos:])
+	}
+	return result
 }

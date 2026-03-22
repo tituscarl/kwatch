@@ -131,6 +131,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// If logs view is open, handle keys
 		if a.showLogs {
 			if key.Matches(msg, Keys.Escape) {
+				// If grep is active, cancel it first
+				if a.logs.HasActiveFilter() {
+					a.logs.CancelFilter()
+					return a, nil
+				}
 				a.stopFollowing()
 				a.showLogs = false
 				a.statusbar.hidden = false
