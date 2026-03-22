@@ -155,8 +155,8 @@ func (d DeploymentsModel) renderRow(dep k8s.DeploymentInfo, selected bool) strin
 	values := d.rowValues(dep)
 
 	selectedStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("#7D56F4")).
-		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(colorPurple).
+		Foreground(lipgloss.Color("#000000")).
 		Bold(true)
 
 	var parts []string

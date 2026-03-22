@@ -171,8 +171,8 @@ func (p PodsModel) renderRow(pod k8s.PodInfo, selected bool) string {
 	values := p.rowValues(pod)
 
 	selectedStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("#7D56F4")).
-		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(colorPurple).
+		Foreground(lipgloss.Color("#000000")).
 		Bold(true)
 
 	var parts []string

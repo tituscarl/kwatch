@@ -51,6 +51,9 @@ kwatch --context gke_myproject_us-central1_mycluster
 
 # Custom refresh interval (default: 5 seconds)
 kwatch --refresh 10
+
+# Set color theme
+kwatch --theme everforest
 ```
 
 ## Keyboard shortcuts
@@ -75,6 +78,16 @@ kwatch --refresh 10
 | `--kubeconfig` | | `~/.kube/config` | Path to kubeconfig file |
 | `--context` | | | Kubernetes context to use |
 | `--refresh` | | `5` | Refresh interval in seconds |
+| `--theme` | | `github-dark` | Color theme |
+
+## Themes
+
+| Theme | Description |
+|-------|-------------|
+| `github-dark` | GitHub Dark — blue accent (default) |
+| `everforest` | Everforest — soft green, easy on the eyes |
+| `one-dark-pro` | One Dark Pro — Atom-inspired muted palette |
+| `vscode-dark` | VSCode Dark — classic VS Code colors |
 
 ## Requirements
 
