@@ -103,30 +103,6 @@ rules:
     verbs: ["get", "list"]
 ```
 
-## Project structure
-
-```
-cmd/root.go              CLI entry point and flags
-internal/k8s/            Kubernetes data layer (read-only)
-  client.go              Client initialization from kubeconfig
-  pods.go                Pod listing with status derivation
-  deployments.go         Deployment listing
-  events.go              Event listing
-  metrics.go             Pod metrics (CPU/memory usage)
-  types.go               Shared data types
-internal/tui/            Terminal UI (Bubble Tea)
-  app.go                 Root model, tab routing, refresh loop
-  overview.go            Overview tab with summary cards
-  pods.go                Pods table with resource columns
-  deployments.go         Deployments table
-  events.go              Events list
-  detail.go              Detail overlay view
-  styles.go              Color scheme and styles
-  keys.go                Key bindings
-  header.go              Header bar
-  statusbar.go           Status bar
-```
-
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
