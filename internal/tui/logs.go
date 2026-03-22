@@ -23,6 +23,11 @@ type LogsModel struct {
 	following bool
 	atBottom  bool // track if user is at the bottom
 
+	// Multi-pod
+	multiPod bool
+	podCount int
+	loading  bool
+
 	// Grep/filter
 	filtering       bool           // user is typing a search query
 	filterInput     string         // text being typed
@@ -40,7 +45,7 @@ type LogsUpdatedMsg struct {
 }
 
 type LogLineMsg struct {
-	Line string
+	Lines []string
 }
 
 type LogStreamEndedMsg struct {
@@ -55,6 +60,30 @@ func (l *LogsModel) Show(podName, namespace, container string) {
 	l.podName = podName
 	l.namespace = namespace
 	l.container = container
+	l.multiPod = false
+	l.podCount = 0
+	l.loading = true
+	l.lines = nil
+	l.offset = 0
+	l.err = nil
+	l.following = false
+	l.atBottom = true
+	l.filtering = false
+	l.filterInput = ""
+	l.filterTerm = ""
+	l.filterRegex = nil
+	l.filterCaseSense = false
+	l.matchLines = nil
+	l.matchCursor = 0
+}
+
+func (l *LogsModel) ShowMultiPod(deploymentName, namespace string, podCount int) {
+	l.podName = deploymentName
+	l.namespace = namespace
+	l.container = ""
+	l.multiPod = true
+	l.podCount = podCount
+	l.loading = true
 	l.lines = nil
 	l.offset = 0
 	l.err = nil
@@ -120,6 +149,7 @@ func (l *LogsModel) refilter() {
 }
 
 func (l *LogsModel) UpdateLogs(content string, err error) {
+	l.loading = false
 	if err != nil {
 		l.err = err
 		l.lines = nil
@@ -135,16 +165,19 @@ func (l *LogsModel) UpdateLogs(content string, err error) {
 	}
 }
 
-func (l *LogsModel) AppendLine(line string) {
-	l.lines = append(l.lines, line)
+func (l *LogsModel) AppendLines(lines []string) {
+	l.lines = append(l.lines, lines...)
 	// Cap total lines to prevent unbounded memory growth
 	if len(l.lines) > maxLogLines {
 		l.lines = l.lines[len(l.lines)-maxLogLines:]
 		l.refilter() // indices shift after trimming
 	} else if l.filterRegex != nil {
-		// Check if new line matches the active filter
-		if l.filterRegex.MatchString(line) {
-			l.matchLines = append(l.matchLines, len(l.lines)-1)
+		// Check new lines against filter
+		base := len(l.lines) - len(lines)
+		for i, line := range lines {
+			if l.filterRegex.MatchString(line) {
+				l.matchLines = append(l.matchLines, base+i)
+			}
 		}
 	}
 	// Auto-scroll if at bottom
@@ -279,7 +312,12 @@ func (l LogsModel) View() string {
 		Foreground(colorPurple).
 		Padding(0, 1)
 
-	title := titleStyle.Render(fmt.Sprintf("Logs: %s/%s", l.podName, l.container))
+	var title string
+	if l.multiPod {
+		title = titleStyle.Render(fmt.Sprintf("Logs: %s (all %d pods)", l.podName, l.podCount))
+	} else {
+		title = titleStyle.Render(fmt.Sprintf("Logs: %s/%s", l.podName, l.container))
+	}
 
 	// Mode badge
 	var modeBadge string
@@ -350,7 +388,17 @@ func (l LogsModel) View() string {
 	}
 
 	if len(l.lines) == 0 {
-		noLogs := lipgloss.NewStyle().Foreground(colorDimText).Render("  No logs available")
+		var msg string
+		if l.loading {
+			if l.multiPod {
+				msg = fmt.Sprintf("  Loading logs from %d pods...", l.podCount)
+			} else {
+				msg = "  Loading logs..."
+			}
+		} else {
+			msg = "  No logs available"
+		}
+		noLogs := lipgloss.NewStyle().Foreground(colorDimText).Render(msg)
 		return lipgloss.JoinVertical(lipgloss.Left, "", title, "", noLogs, "", bottomBar)
 	}
 

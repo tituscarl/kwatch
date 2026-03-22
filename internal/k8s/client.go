@@ -58,6 +58,11 @@ func NewClient(kubeconfig, kubeContext string) (*Client, error) {
 		return nil, fmt.Errorf("failed to create rest config: %w", err)
 	}
 
+	// Raise rate limits for multi-pod log streaming (default is 5 QPS / burst 10).
+	// This is a read-only tool, so higher QPS is safe.
+	restConfig.QPS = 50
+	restConfig.Burst = 100
+
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)

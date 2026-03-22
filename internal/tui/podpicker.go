@@ -45,9 +45,21 @@ func (p *PodPickerModel) Hide() {
 func (p *PodPickerModel) UpdatePods(pods []k8s.PodInfo) {
 	p.pods = pods
 	p.loading = false
-	if p.cursor >= len(pods) {
-		p.cursor = max(0, len(pods)-1)
+	// +1 for the "All Pods" row at index 0
+	total := len(pods) + 1
+	if p.cursor >= total {
+		p.cursor = max(0, total-1)
 	}
+}
+
+// IsAllPodsSelected returns true if the "All Pods" option is selected (cursor == 0).
+func (p PodPickerModel) IsAllPodsSelected() bool {
+	return p.cursor == 0
+}
+
+// AllPods returns all pods in the picker.
+func (p PodPickerModel) AllPods() []k8s.PodInfo {
+	return p.pods
 }
 
 func (p *PodPickerModel) SetSize(w, h int) {
@@ -56,27 +68,37 @@ func (p *PodPickerModel) SetSize(w, h int) {
 }
 
 func (p PodPickerModel) SelectedPod() (k8s.PodInfo, bool) {
-	if p.cursor < len(p.pods) {
-		return p.pods[p.cursor], true
+	// cursor 0 is "All Pods", real pods start at index 1
+	idx := p.cursor - 1
+	if idx >= 0 && idx < len(p.pods) {
+		return p.pods[idx], true
 	}
 	return k8s.PodInfo{}, false
 }
 
 func (p *PodPickerModel) Update(msg tea.KeyMsg) {
+	total := len(p.pods) + 1 // +1 for "All Pods" at cursor 0
 	switch msg.String() {
 	case "up", "k":
 		if p.cursor > 0 {
 			p.cursor--
-			if p.cursor < p.offset {
-				p.offset = p.cursor
+			// offset only applies to pod list (cursor >= 1)
+			if p.cursor >= 1 {
+				podIdx := p.cursor - 1
+				if podIdx < p.offset {
+					p.offset = podIdx
+				}
 			}
 		}
 	case "down", "j":
-		if p.cursor < len(p.pods)-1 {
+		if p.cursor < total-1 {
 			p.cursor++
-			vis := p.visibleRows()
-			if p.cursor >= p.offset+vis {
-				p.offset = p.cursor - vis + 1
+			if p.cursor >= 1 {
+				podIdx := p.cursor - 1
+				vis := p.visibleRows()
+				if podIdx >= p.offset+vis {
+					p.offset = podIdx - vis + 1
+				}
 			}
 		}
 	}
@@ -107,22 +129,33 @@ func (p PodPickerModel) View() string {
 		Foreground(lipgloss.Color("#000000")).
 		Bold(true)
 
+	// "All Pods" — always visible, fixed above the table
+	allPodsLabel := fmt.Sprintf("All Pods (%d pods)", len(p.pods))
+	var allPodsRow string
+	if p.cursor == 0 {
+		allPodsRow = selectedStyle.Render("> ") +
+			selectedStyle.Width(p.width-12).Padding(0, 1).Render(allPodsLabel)
+	} else {
+		allPodsRow = "  " + lipgloss.NewStyle().
+			Foreground(colorPurple).Bold(true).Padding(0, 1).Render(allPodsLabel)
+	}
+
+	// Table header
 	cols := p.columns()
-
-	var b strings.Builder
-
-	// Header
 	var headerParts []string
 	for _, col := range cols {
 		headerParts = append(headerParts, TableHeaderStyle.Width(col.width).Render(col.name))
 	}
-	b.WriteString("  " + lipgloss.JoinHorizontal(lipgloss.Top, headerParts...) + "\n")
+	header := "  " + lipgloss.JoinHorizontal(lipgloss.Top, headerParts...)
 
+	// Scrollable pod rows
+	var b strings.Builder
 	visibleRows := p.visibleRows()
 	end := min(p.offset+visibleRows, len(p.pods))
 
 	for i := p.offset; i < end; i++ {
 		pod := p.pods[i]
+		selected := (p.cursor - 1) == i // cursor 1+ maps to pods[0+]
 		values := []string{
 			truncate(pod.Name, cols[0].width-2),
 			pod.Status,
@@ -133,7 +166,7 @@ func (p PodPickerModel) View() string {
 
 		var parts []string
 		for j, col := range cols {
-			if i == p.cursor {
+			if selected {
 				parts = append(parts, selectedStyle.Width(col.width).Padding(0, 1).Render(values[j]))
 			} else {
 				style := TableCellStyle.Width(col.width)
@@ -144,7 +177,7 @@ func (p PodPickerModel) View() string {
 			}
 		}
 
-		if i == p.cursor {
+		if selected {
 			b.WriteString(selectedStyle.Render("> ") + lipgloss.JoinHorizontal(lipgloss.Top, parts...) + "\n")
 		} else {
 			b.WriteString("  " + lipgloss.JoinHorizontal(lipgloss.Top, parts...) + "\n")
@@ -153,12 +186,12 @@ func (p PodPickerModel) View() string {
 
 	if len(p.pods) > visibleRows {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorDimText).Render(
-			fmt.Sprintf("  showing %d-%d of %d", p.offset+1, end, len(p.pods))))
+			fmt.Sprintf("  showing %d-%d of %d pods", p.offset+1, end, len(p.pods))))
 	}
 
 	content := DetailBorderStyle.
 		Width(p.width - 6).
-		Render(b.String())
+		Render(allPodsRow + "\n" + header + "\n" + b.String())
 
 	return lipgloss.JoinVertical(lipgloss.Left, "", title, hint, content)
 }
@@ -178,6 +211,6 @@ func (p PodPickerModel) columns() []column {
 }
 
 func (p PodPickerModel) visibleRows() int {
-	h := p.height - 10
+	h := p.height - 14 // account for title, hint, border, "All Pods" row, header, scroll indicator
 	return max(h, 3)
 }

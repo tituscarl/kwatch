@@ -50,6 +50,10 @@ type App struct {
 	podPicker      PodPickerModel
 	showPodPicker  bool
 
+	// Multi-pod log state
+	multiPodLog  bool
+	multiPodPods []k8s.PodInfo
+
 	width  int
 	height int
 	err    error
@@ -112,12 +116,25 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			if key.Matches(msg, Keys.Enter) {
-				if pod, ok := a.podPicker.SelectedPod(); ok {
+				if a.podPicker.IsAllPodsSelected() {
+					pods := a.podPicker.AllPods()
+					if len(pods) == 0 {
+						return a, nil
+					}
+					a.showPodPicker = false
+					a.multiPodLog = true
+					a.multiPodPods = pods
+					a.logs.ShowMultiPod(a.podPicker.deploymentName, pods[0].Namespace, len(pods))
+					a.showLogs = true
+					return a, a.fetchLogs()
+				} else if pod, ok := a.podPicker.SelectedPod(); ok {
 					container := ""
 					if len(pod.Containers) > 0 {
 						container = pod.Containers[0].Name
 					}
 					a.showPodPicker = false
+					a.multiPodLog = false
+					a.multiPodPods = nil
 					a.logs.Show(pod.Name, pod.Namespace, container)
 					a.showLogs = true
 					return a, a.fetchLogs()
@@ -138,6 +155,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				a.stopFollowing()
 				a.showLogs = false
+				a.multiPodLog = false
+				a.multiPodPods = nil
 				a.statusbar.hidden = false
 				return a, nil
 			}
@@ -214,8 +233,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case LogLineMsg:
 		if a.showLogs && a.logs.following {
-			a.logs.AppendLine(msg.Line)
-			// Continue reading the next line from the stream
+			a.logs.AppendLines(msg.Lines)
+			// Continue reading the next batch from the stream
 			cmds = append(cmds, a.readNextLogLine())
 		}
 
@@ -382,17 +401,25 @@ func (a *App) startFollowing() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.logsCancelFunc = cancel
 
-	ch := make(chan string, 100)
-	a.logsCh = ch
 	client := a.client
-	podName := a.logs.podName
 	namespace := a.logs.namespace
-	container := a.logs.container
 
-	// Start the stream goroutine
-	go func() {
-		_ = client.FollowPodLogs(ctx, namespace, podName, container, 50, ch)
-	}()
+	if a.multiPodLog {
+		ch := make(chan string, 100*len(a.multiPodPods))
+		a.logsCh = ch
+		pods := a.multiPodPods
+		go func() {
+			_ = client.FollowMultiPodLogs(ctx, namespace, pods, 50, ch)
+		}()
+	} else {
+		ch := make(chan string, 100)
+		a.logsCh = ch
+		podName := a.logs.podName
+		container := a.logs.container
+		go func() {
+			_ = client.FollowPodLogs(ctx, namespace, podName, container, 50, ch)
+		}()
+	}
 
 	// Return a cmd that reads one line at a time
 	return a.readNextLogLine()
@@ -404,11 +431,30 @@ func (a *App) readNextLogLine() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
+		// Block on first line
 		line, ok := <-ch
 		if !ok {
 			return LogStreamEndedMsg{}
 		}
-		return LogLineMsg{Line: line}
+		// Drain all immediately available lines (non-blocking) into a batch
+		batch := []string{line}
+		for {
+			select {
+			case l, ok := <-ch:
+				if !ok {
+					// Channel closed, return what we have
+					return LogLineMsg{Lines: batch}
+				}
+				batch = append(batch, l)
+				if len(batch) >= 500 {
+					// Cap batch size to keep UI responsive
+					return LogLineMsg{Lines: batch}
+				}
+			default:
+				// No more lines available right now
+				return LogLineMsg{Lines: batch}
+			}
+		}
 	}
 }
 
@@ -421,6 +467,14 @@ func (a *App) stopFollowing() {
 }
 
 func (a *App) fetchLogs() tea.Cmd {
+	if a.multiPodLog {
+		pods := a.multiPodPods
+		namespace := a.logs.namespace
+		return func() tea.Msg {
+			content, err := a.client.GetMultiPodLogs(namespace, pods, 200)
+			return LogsUpdatedMsg{Content: content, Err: err}
+		}
+	}
 	podName := a.logs.podName
 	namespace := a.logs.namespace
 	container := a.logs.container
