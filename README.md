@@ -18,6 +18,13 @@ A terminal UI for monitoring Kubernetes services. Get instant visibility into po
 
 ## Installation
 
+
+### Go install (recommended)
+
+```bash
+go install github.com/tituscarl/kwatch@latest
+```
+
 ### From source
 
 ```bash
@@ -27,12 +34,6 @@ make build
 ```
 
 The binary will be at `./bin/kwatch`.
-
-### Go install
-
-```bash
-go install github.com/tituscarl/kwatch@latest
-```
 
 ## Usage
 
