@@ -1,5 +1,3 @@
-# kwatch
-
 A terminal UI for monitoring Kubernetes services. Get instant visibility into pod health, deployment status, resource usage, and cluster events — without juggling `kubectl` commands.
 
 ![Go](https://img.shields.io/badge/Go-1.25-blue)
