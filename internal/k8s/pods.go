@@ -52,6 +52,15 @@ func podToInfo(pod corev1.Pod) PodInfo {
 			ci.State = cs.State.Terminated.Reason
 		}
 
+		// Check LastTerminationState for OOMKilled
+		if cs.LastTerminationState.Terminated != nil {
+			ci.LastTermReason = cs.LastTerminationState.Terminated.Reason
+			ci.LastTermCode = cs.LastTerminationState.Terminated.ExitCode
+			if !cs.LastTerminationState.Terminated.FinishedAt.IsZero() {
+				ci.LastTermAt = formatDuration(time.Since(cs.LastTerminationState.Terminated.FinishedAt.Time))
+			}
+		}
+
 		// Get resource requests/limits from spec
 		if spec, ok := specMap[cs.Name]; ok {
 			if req := spec.Resources.Requests; req != nil {
@@ -93,6 +102,15 @@ func podToInfo(pod corev1.Pod) PodInfo {
 		resources.MemLim = formatMemory(totalMemLim)
 	}
 
+	// Detect OOMKilled from current or last termination state
+	oomKilled := false
+	for _, ci := range containers {
+		if ci.State == "OOMKilled" || ci.LastTermReason == "OOMKilled" {
+			oomKilled = true
+			break
+		}
+	}
+
 	return PodInfo{
 		Name:       pod.Name,
 		Namespace:  pod.Namespace,
@@ -103,6 +121,7 @@ func podToInfo(pod corev1.Pod) PodInfo {
 		Node:       pod.Spec.NodeName,
 		Resources:  resources,
 		Containers: containers,
+		OOMKilled:  oomKilled,
 	}
 }
 
@@ -163,4 +182,40 @@ func podRestarts(pod corev1.Pod) int32 {
 		total += cs.RestartCount
 	}
 	return total
+}
+
+func formatDuration(d time.Duration) string {
+	hours := d.Hours()
+	switch {
+	case hours >= 24*365:
+		return fmt.Sprintf("%dy ago", int(hours/(24*365)))
+	case hours >= 24:
+		return fmt.Sprintf("%dd ago", int(hours/24))
+	case hours >= 1:
+		return fmt.Sprintf("%dh ago", int(hours))
+	case d.Minutes() >= 1:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	}
+}
+
+// GetOOMEvents returns all pods with OOMKilled containers
+func GetOOMEvents(pods []PodInfo) []OOMEvent {
+	var events []OOMEvent
+	for _, pod := range pods {
+		for _, c := range pod.Containers {
+			if c.State == "OOMKilled" || c.LastTermReason == "OOMKilled" {
+				events = append(events, OOMEvent{
+					PodName:       pod.Name,
+					Namespace:     pod.Namespace,
+					ContainerName: c.Name,
+					Restarts:      c.Restarts,
+					MemLim:        c.MemLim,
+					Ago:           c.LastTermAt,
+				})
+			}
+		}
+	}
+	return events
 }

@@ -53,16 +53,24 @@ func (d *DeploymentsModel) Update(msg tea.Msg) tea.Cmd {
 			case key.Matches(msg, Keys.Escape):
 				d.filtering = false
 				d.filter = ""
+				return nil
 			case msg.Type == tea.KeyBackspace:
 				if len(d.filter) > 0 {
 					d.filter = d.filter[:len(d.filter)-1]
 				}
+				return nil
 			case msg.Type == tea.KeyEnter:
 				d.filtering = false
+				return nil
+			case msg.Type == tea.KeyUp, msg.Type == tea.KeyDown,
+				msg.Type == tea.KeyPgUp, msg.Type == tea.KeyPgDown:
+				// Allow arrow keys to navigate while filtering
 			case msg.Type == tea.KeyRunes:
 				d.filter += string(msg.Runes)
+				d.cursor = 0
+				d.offset = 0
+				return nil
 			}
-			return nil
 		}
 
 		d.handleNav(msg)

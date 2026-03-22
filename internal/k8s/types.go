@@ -14,18 +14,31 @@ type PodInfo struct {
 	Memory     string // "256Mi" or ""
 	Resources  PodResources
 	Containers []ContainerInfo
+	OOMKilled  bool // true if any container was OOMKilled (current or last state)
 }
 
 type ContainerInfo struct {
-	Name       string
-	Ready      bool
-	State      string
-	Restarts   int32
-	Image      string
-	CPUReq     string // e.g. "100m"
-	CPULim     string // e.g. "500m"
-	MemReq     string // e.g. "128Mi"
-	MemLim     string // e.g. "512Mi"
+	Name            string
+	Ready           bool
+	State           string
+	Restarts        int32
+	Image           string
+	CPUReq          string // e.g. "100m"
+	CPULim          string // e.g. "500m"
+	MemReq          string // e.g. "128Mi"
+	MemLim          string // e.g. "512Mi"
+	LastTermReason  string // Last terminated reason (e.g. "OOMKilled")
+	LastTermCode    int32  // Last terminated exit code
+	LastTermAt      string // When it was last terminated
+}
+
+type OOMEvent struct {
+	PodName       string
+	Namespace     string
+	ContainerName string
+	Restarts      int32
+	MemLim        string // Memory limit when OOMKilled
+	Ago           string // How long ago
 }
 
 type PodResources struct {

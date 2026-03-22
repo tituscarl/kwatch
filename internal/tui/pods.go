@@ -62,16 +62,24 @@ func (p *PodsModel) Update(msg tea.Msg) tea.Cmd {
 			case key.Matches(msg, Keys.Escape):
 				p.filtering = false
 				p.filter = ""
+				return nil
 			case msg.Type == tea.KeyBackspace:
 				if len(p.filter) > 0 {
 					p.filter = p.filter[:len(p.filter)-1]
 				}
+				return nil
 			case msg.Type == tea.KeyEnter:
 				p.filtering = false
+				return nil
+			case msg.Type == tea.KeyUp, msg.Type == tea.KeyDown,
+				msg.Type == tea.KeyPgUp, msg.Type == tea.KeyPgDown:
+				// Allow arrow keys to navigate while filtering
 			case msg.Type == tea.KeyRunes:
 				p.filter += string(msg.Runes)
+				p.cursor = 0
+				p.offset = 0
+				return nil
 			}
-			return nil
 		}
 
 		p.handleNav(msg)
@@ -180,10 +188,18 @@ func (p PodsModel) renderRow(pod k8s.PodInfo, selected bool) string {
 		val := values[i]
 
 		if selected {
+			// Show OOM warning even in selected row
+			if col.name == "STATUS" && pod.OOMKilled && pod.Status != "OOMKilled" {
+				val = val + " OOM!"
+			}
 			parts = append(parts, selectedStyle.Width(col.width).Padding(0, 1).Render(val))
 		} else {
 			style := TableCellStyle.Width(col.width)
 			if col.name == "STATUS" {
+				if pod.OOMKilled && pod.Status != "OOMKilled" {
+					// Pod recovered but was OOMKilled before
+					val = val + StyleFailed.Render(" OOM!")
+				}
 				style = style.Inherit(StatusStyle(pod.Status))
 			} else if col.name == "MEM%" {
 				style = style.Inherit(memPctStyle(val))

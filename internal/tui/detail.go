@@ -84,6 +84,16 @@ func (d *DetailModel) ShowPod(pod k8s.PodInfo) {
 			if c.MemReq != "" || c.MemLim != "" {
 				b.WriteString(fmt.Sprintf("    Memory:   %s req / %s lim\n", c.MemReq, c.MemLim))
 			}
+			if c.LastTermReason == "OOMKilled" {
+				oomMsg := StyleFailed.Render("    *** OOMKilled")
+				if c.LastTermAt != "" {
+					oomMsg += StyleFailed.Render(fmt.Sprintf(" (%s)", c.LastTermAt))
+				}
+				if c.MemLim != "" {
+					oomMsg += StyleWarning.Render(fmt.Sprintf(" — limit was %s, consider increasing", c.MemLim))
+				}
+				b.WriteString(oomMsg + "\n")
+			}
 		}
 	}
 

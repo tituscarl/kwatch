@@ -52,6 +52,14 @@ func (o OverviewModel) View() string {
 		healthCard,
 	)
 
+	// OOMKilled alert banner
+	oomEvents := k8s.GetOOMEvents(o.pods)
+	if len(oomEvents) > 0 {
+		oomCard := o.renderOOMCard(oomEvents)
+		return lipgloss.NewStyle().Padding(1, 2).Render(
+			lipgloss.JoinVertical(lipgloss.Left, cards, "", oomCard))
+	}
+
 	return lipgloss.NewStyle().Padding(1, 2).Render(cards)
 }
 
@@ -155,4 +163,42 @@ func (o OverviewModel) renderHealthCard() string {
 
 	content := strings.Join(lines, "\n")
 	return CardStyle.Render(content)
+}
+
+func (o OverviewModel) renderOOMCard(events []k8s.OOMEvent) string {
+	oomStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorRed).
+		Padding(1, 3).
+		Width(o.width - 6)
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorRed)
+
+	var lines []string
+	lines = append(lines, titleStyle.Render(fmt.Sprintf("OOMKilled: %d container(s) ran out of memory", len(events))))
+	lines = append(lines, "")
+
+	for i, e := range events {
+		if i >= 8 {
+			lines = append(lines, StyleWarning.Render(fmt.Sprintf("  +%d more...", len(events)-8)))
+			break
+		}
+		detail := StyleFailed.Render(fmt.Sprintf("  %s", e.PodName))
+		info := fmt.Sprintf("  container: %s", e.ContainerName)
+		if e.MemLim != "" {
+			info += fmt.Sprintf("  limit: %s", e.MemLim)
+		}
+		if e.Ago != "" {
+			info += fmt.Sprintf("  (%s)", e.Ago)
+		}
+		if e.Restarts > 0 {
+			info += fmt.Sprintf("  restarts: %d", e.Restarts)
+		}
+		lines = append(lines, detail)
+		lines = append(lines, lipgloss.NewStyle().Foreground(colorDimText).Render(info))
+	}
+
+	return oomStyle.Render(strings.Join(lines, "\n"))
 }
