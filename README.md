@@ -23,6 +23,9 @@ A terminal UI for monitoring Kubernetes services. Get instant visibility into po
 
 ```bash
 go install github.com/tituscarl/kwatch@latest
+
+# or specific version:
+go install github.com/tituscarl/kwatch@v0.1.1
 ```
 
 ### From source
