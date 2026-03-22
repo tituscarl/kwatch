@@ -64,13 +64,11 @@ kwatch --theme everforest
 
 | Key | Action |
 |-----|--------|
-| `1`-`4` | Switch tabs (Overview, Pods, Deployments, Events) |
 | `Tab` / `Shift+Tab` | Next / previous tab |
 | `j` / `k` or `↑` / `↓` | Navigate up / down |
 | `Enter` | Show detail view for selected resource |
 | `Esc` | Close detail view |
 | `/` | Filter current view |
-| `PgUp` / `PgDn` | Page up / down |
 | `q` / `Ctrl+C` | Quit |
 
 ## Flags
