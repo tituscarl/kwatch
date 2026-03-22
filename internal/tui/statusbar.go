@@ -11,9 +11,14 @@ type StatusBarModel struct {
 	lastRefresh time.Time
 	width       int
 	err         error
+	hidden      bool
 }
 
 func (s StatusBarModel) View() string {
+	if s.hidden {
+		return ""
+	}
+
 	keys := []struct {
 		key  string
 		desc string
@@ -23,6 +28,7 @@ func (s StatusBarModel) View() string {
 		{"tab", "switch"},
 		{"j/k", "navigate"},
 		{"enter", "detail"},
+		{"l", "logs"},
 		{"esc", "back"},
 		{"/", "filter"},
 	}

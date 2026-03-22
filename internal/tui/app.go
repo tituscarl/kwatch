@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -16,6 +17,7 @@ type EventsUpdatedMsg struct{ Events []k8s.EventInfo }
 type MetricsUpdatedMsg struct{ Metrics map[string]k8s.PodMetrics }
 type TickMsg time.Time
 type ErrorMsg struct{ Err error }
+type LogsRefreshMsg struct{}
 
 const (
 	tabOverview = iota
@@ -41,6 +43,12 @@ type App struct {
 	events      EventsModel
 	detail      DetailModel
 	showDetail  bool
+	logs           LogsModel
+	showLogs       bool
+	logsCancelFunc context.CancelFunc // cancel the follow stream
+	logsCh         <-chan string       // channel for follow stream lines
+	podPicker      PodPickerModel
+	showPodPicker  bool
 
 	width  int
 	height int
@@ -62,6 +70,8 @@ func NewApp(client *k8s.Client, namespace string, allNS bool, refresh time.Durat
 		deployments:     NewDeploymentsModel(allNS),
 		events:          NewEventsModel(),
 		detail:          NewDetailModel(),
+		logs:            NewLogsModel(),
+		podPicker:       NewPodPickerModel(),
 	}
 }
 
@@ -90,8 +100,54 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.events.SetSize(msg.Width, contentHeight)
 		a.overview.SetSize(msg.Width, contentHeight)
 		a.detail.SetSize(msg.Width, contentHeight)
+		a.logs.SetSize(msg.Width, contentHeight)
+		a.podPicker.SetSize(msg.Width, contentHeight)
 
 	case tea.KeyMsg:
+		// If pod picker is open
+		if a.showPodPicker {
+			if key.Matches(msg, Keys.Escape) {
+				a.showPodPicker = false
+				a.statusbar.hidden = false
+				return a, nil
+			}
+			if key.Matches(msg, Keys.Enter) {
+				if pod, ok := a.podPicker.SelectedPod(); ok {
+					container := ""
+					if len(pod.Containers) > 0 {
+						container = pod.Containers[0].Name
+					}
+					a.showPodPicker = false
+					a.logs.Show(pod.Name, pod.Namespace, container)
+					a.showLogs = true
+					return a, a.fetchLogs()
+				}
+				return a, nil
+			}
+			a.podPicker.Update(msg)
+			return a, nil
+		}
+
+		// If logs view is open, handle keys
+		if a.showLogs {
+			if key.Matches(msg, Keys.Escape) {
+				a.stopFollowing()
+				a.showLogs = false
+				a.statusbar.hidden = false
+				return a, nil
+			}
+			prevFollowing := a.logs.following
+			a.logs = a.logs.Update(msg)
+			// Handle follow mode toggle
+			if a.logs.following != prevFollowing {
+				if a.logs.following {
+					return a, a.startFollowing()
+				}
+				a.stopFollowing()
+			}
+			return a, nil
+		}
+
 		// If detail view is open, handle escape
 		if a.showDetail {
 			if key.Matches(msg, Keys.Escape) {
@@ -119,6 +175,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.activeTab = (a.activeTab - 1 + len(tabNames)) % len(tabNames)
 		case key.Matches(msg, Keys.Enter):
 			cmds = append(cmds, a.handleEnter())
+		case key.Matches(msg, Keys.Logs):
+			cmds = append(cmds, a.handleLogs())
 		default:
 			cmds = append(cmds, a.updateActiveTab(msg))
 		}
@@ -139,6 +197,36 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MetricsUpdatedMsg:
 		a.pods.UpdateMetrics(msg.Metrics)
 
+	case DeploymentPodsMsg:
+		if msg.Err != nil {
+			a.statusbar.err = msg.Err
+		} else {
+			a.podPicker.UpdatePods(msg.Pods)
+		}
+
+	case LogsUpdatedMsg:
+		a.logs.UpdateLogs(msg.Content, msg.Err)
+
+	case LogLineMsg:
+		if a.showLogs && a.logs.following {
+			a.logs.AppendLine(msg.Line)
+			// Continue reading the next line from the stream
+			cmds = append(cmds, a.readNextLogLine())
+		}
+
+	case LogStreamEndedMsg:
+		if a.showLogs && a.logs.following {
+			a.logs.SetFollowing(false)
+			if msg.Err != nil {
+				a.logs.err = msg.Err
+			}
+		}
+
+	case LogsRefreshMsg:
+		if a.showLogs && !a.logs.following {
+			cmds = append(cmds, a.fetchLogs())
+		}
+
 	case TickMsg:
 		cmds = append(cmds,
 			a.fetchPods(),
@@ -147,6 +235,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.fetchMetrics(),
 			a.tickCmd(),
 		)
+		// Refresh logs if open in snapshot mode
+		if a.showLogs && !a.logs.following {
+			cmds = append(cmds, a.fetchLogs())
+		}
 
 	case ErrorMsg:
 		a.err = msg.Err
@@ -165,7 +257,11 @@ func (a *App) View() string {
 	tabs := a.renderTabs()
 
 	var content string
-	if a.showDetail {
+	if a.showPodPicker {
+		content = a.podPicker.View()
+	} else if a.showLogs {
+		content = a.logs.View()
+	} else if a.showDetail {
 		content = a.detail.View()
 	} else {
 		switch a.activeTab {
@@ -234,6 +330,99 @@ func (a *App) handleEnter() tea.Cmd {
 		}
 	}
 	return nil
+}
+
+func (a *App) handleLogs() tea.Cmd {
+	switch a.activeTab {
+	case tabPods:
+		pod, ok := a.pods.SelectedPod()
+		if !ok {
+			return nil
+		}
+		container := ""
+		if len(pod.Containers) > 0 {
+			container = pod.Containers[0].Name
+		}
+		a.logs.Show(pod.Name, pod.Namespace, container)
+		a.showLogs = true
+		a.statusbar.hidden = true
+		return a.fetchLogs()
+
+	case tabDeployments:
+		dep, ok := a.deployments.SelectedDeployment()
+		if !ok {
+			return nil
+		}
+		a.podPicker.Show(dep.Name)
+		a.showPodPicker = true
+		a.statusbar.hidden = true
+		return a.fetchDeploymentPods(dep.Namespace, dep.Name)
+	}
+	return nil
+}
+
+func (a *App) fetchDeploymentPods(namespace, name string) tea.Cmd {
+	return func() tea.Msg {
+		pods, err := a.client.ListDeploymentPods(namespace, name)
+		if err != nil {
+			return DeploymentPodsMsg{Err: err}
+		}
+		return DeploymentPodsMsg{Pods: pods}
+	}
+}
+
+func (a *App) startFollowing() tea.Cmd {
+	a.stopFollowing() // cancel any existing stream
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.logsCancelFunc = cancel
+
+	ch := make(chan string, 100)
+	a.logsCh = ch
+	client := a.client
+	podName := a.logs.podName
+	namespace := a.logs.namespace
+	container := a.logs.container
+
+	// Start the stream goroutine
+	go func() {
+		_ = client.FollowPodLogs(ctx, namespace, podName, container, 50, ch)
+	}()
+
+	// Return a cmd that reads one line at a time
+	return a.readNextLogLine()
+}
+
+func (a *App) readNextLogLine() tea.Cmd {
+	ch := a.logsCh
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		line, ok := <-ch
+		if !ok {
+			return LogStreamEndedMsg{}
+		}
+		return LogLineMsg{Line: line}
+	}
+}
+
+func (a *App) stopFollowing() {
+	if a.logsCancelFunc != nil {
+		a.logsCancelFunc()
+		a.logsCancelFunc = nil
+	}
+	a.logsCh = nil
+}
+
+func (a *App) fetchLogs() tea.Cmd {
+	podName := a.logs.podName
+	namespace := a.logs.namespace
+	container := a.logs.container
+	return func() tea.Msg {
+		content, err := a.client.GetPodLogs(namespace, podName, container, 200)
+		return LogsUpdatedMsg{Content: content, Err: err}
+	}
 }
 
 func (a *App) updateActiveTab(msg tea.Msg) tea.Cmd {

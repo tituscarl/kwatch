@@ -36,3 +36,29 @@ func (c *Client) ListDeployments(namespace string) ([]DeploymentInfo, error) {
 	}
 	return result, nil
 }
+
+// ListDeploymentPods returns pods belonging to a deployment (read-only).
+func (c *Client) ListDeploymentPods(namespace, deploymentName string) ([]PodInfo, error) {
+	deploy, err := c.clientset.AppsV1().Deployments(namespace).Get(context.Background(), deploymentName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployment: %w", err)
+	}
+
+	selector, err := metav1.LabelSelectorAsSelector(deploy.Spec.Selector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse selector: %w", err)
+	}
+
+	pods, err := c.clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
+		LabelSelector: selector.String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	var result []PodInfo
+	for _, pod := range pods.Items {
+		result = append(result, podToInfo(pod))
+	}
+	return result, nil
+}

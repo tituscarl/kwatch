@@ -15,6 +15,7 @@ type KeyMap struct {
 	Enter    key.Binding
 	Escape   key.Binding
 	Filter   key.Binding
+	Logs     key.Binding
 	PageUp   key.Binding
 	PageDown key.Binding
 }
@@ -67,6 +68,10 @@ var Keys = KeyMap{
 	Filter: key.NewBinding(
 		key.WithKeys("/"),
 		key.WithHelp("/", "filter"),
+	),
+	Logs: key.NewBinding(
+		key.WithKeys("l"),
+		key.WithHelp("l", "logs"),
 	),
 	PageUp: key.NewBinding(
 		key.WithKeys("pgup"),
