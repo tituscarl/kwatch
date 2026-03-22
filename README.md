@@ -3,6 +3,8 @@ A terminal UI for monitoring Kubernetes services. Get instant visibility into po
 ![Go](https://img.shields.io/badge/Go-1.25-blue)
 ![License](https://img.shields.io/badge/License-Apache%202.0-blue)
 
+> **Note:** kwatch currently only supports **Google Kubernetes Engine (GKE)** clusters. Support for other Kubernetes providers (EKS, AKS, etc.) is planned for future releases.
+
 ## Features
 
 - **Overview dashboard** — summary cards showing pod and deployment health at a glance
