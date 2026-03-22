@@ -38,6 +38,9 @@ The binary will be at `./bin/kwatch`.
 ## Usage
 
 ```bash
+# help
+kwatch -h
+
 # Watch the default namespace
 kwatch
 
