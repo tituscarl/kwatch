@@ -222,8 +222,11 @@ func (l LogsModel) Update(msg tea.KeyMsg) LogsModel {
 			if l.filterInput != "" {
 				l.filterTerm = l.filterInput
 				l.refilter()
-				l.offset = 0
-				l.atBottom = false
+				l.offset = l.maxOffset()
+				l.atBottom = true
+				if len(l.matchLines) > 0 {
+					l.matchCursor = len(l.matchLines) - 1
+				}
 			}
 			l.filterInput = ""
 		case msg.Type == tea.KeyTab:
