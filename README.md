@@ -11,13 +11,16 @@ A terminal UI for monitoring Kubernetes services. Get instant visibility into po
 - **Pods view** — status, readiness, restarts, age, CPU/memory usage, memory limits, and utilization percentage
 - **Deployments view** — replica status, rollout strategy, availability
 - **Events view** — recent cluster events with warning highlighting
+- **Log viewer** — view pod logs with snapshot or real-time follow mode, with error/warning line highlighting
 - **Detail view** — press Enter on any pod or deployment for expanded info including per-container resource requests/limits
+- **OOMKilled detection** — red alert banner on overview, `OOM!` tag on affected pods, even after restart
 - **Color-coded status** — green for healthy, yellow for pending, red for failed
-- **Filtering** — press `/` to filter by name or status
+- **Memory utilization** — `MEM%` column shows usage vs limit, color-coded (green <70%, yellow 70-90%, red >90%)
+- **Filtering** — press `/` to filter by name or status, navigate filtered results with arrow keys
+- **Themes** — 4 built-in color themes
 - **Read-only** — only uses Kubernetes List/Get API calls, never modifies your cluster
 
 ## Installation
-
 
 ### Go install (recommended)
 
@@ -65,14 +68,34 @@ kwatch --theme everforest
 
 ## Keyboard shortcuts
 
+### General
+
 | Key | Action |
 |-----|--------|
+| `1`-`4` | Switch tabs (Overview, Pods, Deployments, Events) |
 | `Tab` / `Shift+Tab` | Next / previous tab |
 | `j` / `k` or `↑` / `↓` | Navigate up / down |
 | `Enter` | Show detail view for selected resource |
-| `Esc` | Close detail view |
+| `l` | View logs for selected pod or deployment |
 | `/` | Filter current view |
+| `Esc` | Close current overlay (detail, logs, filter) |
 | `q` / `Ctrl+C` | Quit |
+
+### Log viewer
+
+| Key | Action |
+|-----|--------|
+| `f` | Toggle follow mode (real-time tailing) |
+| `j` / `k` or `↑` / `↓` | Scroll up / down |
+| `G` | Jump to bottom |
+| `g` | Jump to top |
+| `PgUp` / `PgDn` | Page up / down |
+| `Esc` | Close log viewer |
+
+### Log modes
+
+- **SNAPSHOT** — fetches last 200 lines, refreshes every tick interval
+- **FOLLOWING** — real-time log streaming, new lines appear instantly
 
 ## Flags
 
@@ -111,7 +134,7 @@ metadata:
   name: kwatch-reader
 rules:
   - apiGroups: [""]
-    resources: ["pods", "events"]
+    resources: ["pods", "pods/log", "events"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
