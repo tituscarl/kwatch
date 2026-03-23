@@ -424,8 +424,13 @@ func (l LogsModel) View() string {
 			for i := start; i < end; i++ {
 				origIdx := l.matchLines[i]
 				lineNum := lineNumStyle.Render(fmt.Sprintf("%d", origIdx+1))
-				line := l.lines[origIdx]
+				fullLine := l.lines[origIdx]
 
+				// Check severity on full line BEFORE truncation
+				isError := containsLogLevel(fullLine, "error", "fatal", "panic", "ERRO", "FATA") || isKlogError(fullLine)
+				isWarn := containsLogLevel(fullLine, "warn", "WARN") || isKlogWarn(fullLine)
+
+				line := fullLine
 				maxLineWidth := l.width - lineNumWidth - 7
 				if maxLineWidth > 0 && len(line) > maxLineWidth {
 					line = line[:maxLineWidth-3] + "..."
@@ -434,17 +439,17 @@ func (l LogsModel) View() string {
 				// Style with match highlighting
 				var styled string
 				if l.multiPod {
-					if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
+					if isError {
 						styled = renderPodLineHighlighted(line, l.filterRegex, StyleFailed)
-					} else if containsLogLevel(line, "warn", "WARN") {
+					} else if isWarn {
 						styled = renderPodLineHighlighted(line, l.filterRegex, StyleWarning)
 					} else {
 						styled = renderPodLineHighlighted(line, l.filterRegex, logLineStyle)
 					}
 				} else {
-					if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
+					if isError {
 						styled = highlightMatches(line, l.filterRegex, StyleFailed)
-					} else if containsLogLevel(line, "warn", "WARN") {
+					} else if isWarn {
 						styled = highlightMatches(line, l.filterRegex, StyleWarning)
 					} else {
 						styled = highlightMatches(line, l.filterRegex, logLineStyle)
@@ -469,8 +474,13 @@ func (l LogsModel) View() string {
 
 		for i := start; i < end; i++ {
 			lineNum := lineNumStyle.Render(fmt.Sprintf("%d", i+1))
-			line := l.lines[i]
+			fullLine := l.lines[i]
 
+			// Check severity on full line BEFORE truncation
+			isError := containsLogLevel(fullLine, "error", "fatal", "panic", "ERRO", "FATA") || isKlogError(fullLine)
+			isWarn := containsLogLevel(fullLine, "warn", "WARN") || isKlogWarn(fullLine)
+
+			line := fullLine
 			maxLineWidth := l.width - lineNumWidth - 6
 			if maxLineWidth > 0 && len(line) > maxLineWidth {
 				line = line[:maxLineWidth-3] + "..."
@@ -478,19 +488,20 @@ func (l LogsModel) View() string {
 
 			var styled string
 			if l.multiPod {
-				if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
+				if isError {
 					styled = renderPodLine(line, StyleFailed)
-				} else if containsLogLevel(line, "warn", "WARN") {
+				} else if isWarn {
 					styled = renderPodLine(line, StyleWarning)
 				} else {
 					styled = renderPodLine(line, logLineStyle)
 				}
 			} else {
-				styled = logLineStyle.Render(line)
-				if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
+				if isError {
 					styled = StyleFailed.Render(line)
-				} else if containsLogLevel(line, "warn", "WARN") {
+				} else if isWarn {
 					styled = StyleWarning.Render(line)
+				} else {
+					styled = logLineStyle.Render(line)
 				}
 			}
 			b.WriteString(lineNum + " " + styled + "\n")
@@ -532,6 +543,36 @@ func containsLogLevel(line string, levels ...string) bool {
 		}
 	}
 	return false
+}
+
+// isKlogError detects klog E (error) and F (fatal) prefixes like "E0323" or "F0323".
+// Also handles multi-pod format: "[pod-id] E0323 ..."
+func isKlogError(line string) bool {
+	s := line
+	// Skip past [pod-id] prefix if present
+	if len(s) > 0 && s[0] == '[' {
+		if idx := strings.Index(s, "] "); idx != -1 {
+			s = s[idx+2:]
+		}
+	}
+	if len(s) < 2 {
+		return false
+	}
+	return (s[0] == 'E' || s[0] == 'F') && s[1] >= '0' && s[1] <= '9'
+}
+
+// isKlogWarn detects klog W (warning) prefix like "W0323".
+func isKlogWarn(line string) bool {
+	s := line
+	if len(s) > 0 && s[0] == '[' {
+		if idx := strings.Index(s, "] "); idx != -1 {
+			s = s[idx+2:]
+		}
+	}
+	if len(s) < 2 {
+		return false
+	}
+	return s[0] == 'W' && s[1] >= '0' && s[1] <= '9'
 }
 
 func highlightMatches(line string, re *regexp.Regexp, baseStyle lipgloss.Style) string {
