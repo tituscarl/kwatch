@@ -144,6 +144,14 @@ rules:
     verbs: ["get", "list"]
 ```
 
+## Built with
+
+- [Bubble Tea](https://github.com/charmbracelet/bubbletea) — terminal UI framework
+- [Lip Gloss](https://github.com/charmbracelet/lipgloss) — terminal styling
+- [Bubbles](https://github.com/charmbracelet/bubbles) — TUI components
+- [Cobra](https://github.com/spf13/cobra) — CLI framework
+- [client-go](https://github.com/kubernetes/client-go) — Kubernetes Go client
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
