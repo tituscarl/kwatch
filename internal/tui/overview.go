@@ -66,16 +66,25 @@ func (o OverviewModel) View() string {
 
 	parts := []string{cards}
 
-	// Needs Attention section — only if there are issues
-	attention := o.renderAttention()
-	if attention != "" {
-		parts = append(parts, "", attention)
+	// Only show extra sections if there's enough vertical space
+	cardsHeight := lipgloss.Height(cards)
+	remaining := o.height - cardsHeight - 4 // padding + tab bar
+
+	// Needs Attention section — only if there are issues and enough space
+	if remaining > 6 {
+		attention := o.renderAttention()
+		if attention != "" {
+			parts = append(parts, "", attention)
+			remaining -= lipgloss.Height(attention) + 1
+		}
 	}
 
-	// Recent warning events
-	warnings := o.renderRecentWarnings()
-	if warnings != "" {
-		parts = append(parts, "", warnings)
+	// Recent warning events — only if still have space
+	if remaining > 6 {
+		warnings := o.renderRecentWarnings()
+		if warnings != "" {
+			parts = append(parts, "", warnings)
+		}
 	}
 
 	return lipgloss.NewStyle().Padding(1, 2).Render(
