@@ -11,12 +11,13 @@ import (
 )
 
 type Client struct {
-	clientset     kubernetes.Interface
-	metricsClient metricsv.Interface
-	clusterName   string
-	contextName   string
-	serverURL     string
-	metricsAvail  bool
+	clientset        kubernetes.Interface
+	metricsClient    metricsv.Interface
+	clusterName      string
+	contextName      string
+	serverURL        string
+	defaultNamespace string
+	metricsAvail     bool
 }
 
 type ClusterInfo struct {
@@ -46,8 +47,12 @@ func NewClient(kubeconfig, kubeContext string) (*Client, error) {
 
 	clusterName := ""
 	serverURL := ""
+	defaultNS := "default"
 	if ctx, ok := rawConfig.Contexts[contextName]; ok {
 		clusterName = ctx.Cluster
+		if ctx.Namespace != "" {
+			defaultNS = ctx.Namespace
+		}
 		if cluster, ok := rawConfig.Clusters[ctx.Cluster]; ok {
 			serverURL = cluster.Server
 		}
@@ -74,11 +79,12 @@ func NewClient(kubeconfig, kubeContext string) (*Client, error) {
 	}
 
 	c := &Client{
-		clientset:     clientset,
-		metricsClient: metricsClient,
-		clusterName:   clusterName,
-		contextName:   contextName,
-		serverURL:     serverURL,
+		clientset:        clientset,
+		metricsClient:    metricsClient,
+		clusterName:      clusterName,
+		contextName:      contextName,
+		serverURL:        serverURL,
+		defaultNamespace: defaultNS,
 	}
 
 	// Probe metrics API availability
@@ -94,6 +100,10 @@ func (c *Client) probeMetrics() bool {
 
 func (c *Client) MetricsAvailable() bool {
 	return c.metricsAvail
+}
+
+func (c *Client) DefaultNamespace() string {
+	return c.defaultNamespace
 }
 
 func (c *Client) ClusterInfo() ClusterInfo {

@@ -63,6 +63,9 @@ func run(cmd *cobra.Command, args []string) error {
 	ns := namespace
 	if allNamespaces {
 		ns = ""
+	} else if ns == "" {
+		// Resolve namespace from kubeconfig context (defaults to "default")
+		ns = client.DefaultNamespace()
 	}
 
 	refreshInterval := time.Duration(refreshSecs) * time.Second
