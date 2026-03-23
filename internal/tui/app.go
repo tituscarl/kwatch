@@ -217,6 +217,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case EventsUpdatedMsg:
 		a.events.UpdateEvents(msg.Events)
+		a.overview.UpdateEvents(msg.Events)
 
 	case MetricsUpdatedMsg:
 		a.pods.UpdateMetrics(msg.Metrics)

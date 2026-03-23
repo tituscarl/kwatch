@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -11,6 +12,7 @@ import (
 type OverviewModel struct {
 	pods        []k8s.PodInfo
 	deployments []k8s.DeploymentInfo
+	events      []k8s.EventInfo
 	width       int
 	height      int
 }
@@ -27,6 +29,10 @@ func (o *OverviewModel) UpdateDeployments(deps []k8s.DeploymentInfo) {
 	o.deployments = deps
 }
 
+func (o *OverviewModel) UpdateEvents(events []k8s.EventInfo) {
+	o.events = events
+}
+
 func (o *OverviewModel) SetSize(w, h int) {
 	o.width = w
 	o.height = h
@@ -40,9 +46,15 @@ func (o OverviewModel) View() string {
 			Render("Waiting for data...")
 	}
 
-	podsCard := o.renderPodsCard()
-	deploymentsCard := o.renderDeploymentsCard()
-	healthCard := o.renderHealthCard()
+	// Responsive card widths
+	cardWidth := (o.width - 10) / 3
+	if cardWidth < 24 {
+		cardWidth = 24
+	}
+
+	podsCard := o.renderPodsCard(cardWidth)
+	deploymentsCard := o.renderDeploymentsCard(cardWidth)
+	healthCard := o.renderHealthCard(cardWidth)
 
 	cards := lipgloss.JoinHorizontal(lipgloss.Top,
 		podsCard,
@@ -52,52 +64,76 @@ func (o OverviewModel) View() string {
 		healthCard,
 	)
 
-	// OOMKilled alert banner
-	oomEvents := k8s.GetOOMEvents(o.pods)
-	if len(oomEvents) > 0 {
-		oomCard := o.renderOOMCard(oomEvents)
-		return lipgloss.NewStyle().Padding(1, 2).Render(
-			lipgloss.JoinVertical(lipgloss.Left, cards, "", oomCard))
+	parts := []string{cards}
+
+	// Needs Attention section — only if there are issues
+	attention := o.renderAttention()
+	if attention != "" {
+		parts = append(parts, "", attention)
 	}
 
-	return lipgloss.NewStyle().Padding(1, 2).Render(cards)
+	// Recent warning events
+	warnings := o.renderRecentWarnings()
+	if warnings != "" {
+		parts = append(parts, "", warnings)
+	}
+
+	return lipgloss.NewStyle().Padding(1, 2).Render(
+		lipgloss.JoinVertical(lipgloss.Left, parts...))
 }
 
-func (o OverviewModel) renderPodsCard() string {
-	counts := map[string]int{}
+// --- Cards ---
+
+func (o OverviewModel) renderPodsCard(width int) string {
+	running, pending, failed, completed := 0, 0, 0, 0
 	for _, p := range o.pods {
-		counts[p.Status]++
+		switch {
+		case p.Status == "Running":
+			running++
+		case p.Status == "Pending" || p.Status == "ContainerCreating" || p.Status == "PodInitializing":
+			pending++
+		case p.Status == "Succeeded" || p.Status == "Completed":
+			completed++
+		case p.Status == "Failed" || p.Status == "CrashLoopBackOff" || p.Status == "Error" ||
+			p.Status == "ImagePullBackOff" || p.Status == "OOMKilled" || p.Status == "ErrImagePull":
+			failed++
+		default:
+			pending++
+		}
 	}
+
+	total := len(o.pods)
+	bigNum := lipgloss.NewStyle().Bold(true).Foreground(colorWhite).Render(fmt.Sprintf("%d", total))
+	label := lipgloss.NewStyle().Foreground(colorDimText).Render(" pods")
 
 	var lines []string
 	lines = append(lines, CardTitleStyle.Render("PODS"))
-	lines = append(lines, fmt.Sprintf("Total: %d", len(o.pods)))
+	lines = append(lines, bigNum+label)
 	lines = append(lines, "")
 
-	if c := counts["Running"]; c > 0 {
-		lines = append(lines, StyleRunning.Render(fmt.Sprintf("● Running      %d", c)))
-	}
-	if c := counts["Pending"] + counts["ContainerCreating"] + counts["PodInitializing"]; c > 0 {
-		lines = append(lines, StylePending.Render(fmt.Sprintf("● Pending      %d", c)))
-	}
-	failedCount := 0
-	for status, c := range counts {
-		if status == "Failed" || status == "CrashLoopBackOff" || status == "Error" || status == "ImagePullBackOff" || status == "OOMKilled" {
-			failedCount += c
-		}
-	}
-	if failedCount > 0 {
-		lines = append(lines, StyleFailed.Render(fmt.Sprintf("● Failed       %d", failedCount)))
-	}
-	if c := counts["Succeeded"] + counts["Completed"]; c > 0 {
-		lines = append(lines, StyleSucceeded.Render(fmt.Sprintf("● Completed    %d", c)))
+	if total > 0 {
+		barWidth := width - 10
+		lines = append(lines, renderStatusBar(barWidth, total, running, pending, failed, completed))
+		lines = append(lines, "")
 	}
 
-	content := strings.Join(lines, "\n")
-	return CardStyle.Render(content)
+	if running > 0 {
+		lines = append(lines, StyleRunning.Render("●")+fmt.Sprintf(" Running      %d", running))
+	}
+	if pending > 0 {
+		lines = append(lines, StylePending.Render("●")+fmt.Sprintf(" Pending      %d", pending))
+	}
+	if failed > 0 {
+		lines = append(lines, StyleFailed.Render("●")+fmt.Sprintf(" Failed       %d", failed))
+	}
+	if completed > 0 {
+		lines = append(lines, StyleSucceeded.Render("●")+fmt.Sprintf(" Completed    %d", completed))
+	}
+
+	return CardStyle.Width(width).Render(strings.Join(lines, "\n"))
 }
 
-func (o OverviewModel) renderDeploymentsCard() string {
+func (o OverviewModel) renderDeploymentsCard(width int) string {
 	var ready, progressing, unavailable int
 	for _, d := range o.deployments {
 		if d.Available == d.Desired && d.Desired > 0 {
@@ -109,96 +145,338 @@ func (o OverviewModel) renderDeploymentsCard() string {
 		}
 	}
 
+	total := len(o.deployments)
+	bigNum := lipgloss.NewStyle().Bold(true).Foreground(colorWhite).Render(fmt.Sprintf("%d", total))
+	label := lipgloss.NewStyle().Foreground(colorDimText).Render(" deployments")
+
 	var lines []string
 	lines = append(lines, CardTitleStyle.Render("DEPLOYMENTS"))
-	lines = append(lines, fmt.Sprintf("Total: %d", len(o.deployments)))
+	lines = append(lines, bigNum+label)
 	lines = append(lines, "")
 
+	if total > 0 {
+		barWidth := width - 10
+		lines = append(lines, renderStatusBar(barWidth, total, ready, progressing, unavailable, 0))
+		lines = append(lines, "")
+	}
+
 	if ready > 0 {
-		lines = append(lines, StyleRunning.Render(fmt.Sprintf("● Available    %d", ready)))
+		lines = append(lines, StyleRunning.Render("●")+fmt.Sprintf(" Available    %d", ready))
 	}
 	if progressing > 0 {
-		lines = append(lines, StylePending.Render(fmt.Sprintf("● Progressing  %d", progressing)))
+		lines = append(lines, StylePending.Render("●")+fmt.Sprintf(" Progressing  %d", progressing))
 	}
 	if unavailable > 0 {
-		lines = append(lines, StyleFailed.Render(fmt.Sprintf("● Unavailable  %d", unavailable)))
+		lines = append(lines, StyleFailed.Render("●")+fmt.Sprintf(" Unavailable  %d", unavailable))
 	}
 
-	content := strings.Join(lines, "\n")
-	return CardStyle.Render(content)
+	return CardStyle.Width(width).Render(strings.Join(lines, "\n"))
 }
 
-func (o OverviewModel) renderHealthCard() string {
+func (o OverviewModel) renderHealthCard(width int) string {
 	var lines []string
 	lines = append(lines, CardTitleStyle.Render("HEALTH"))
 	lines = append(lines, "")
 
-	// Count issues
-	var issues []string
+	// Count issues by type
+	crashLoop, imagePull, oomKilled, otherFailed := 0, 0, 0, 0
 	for _, p := range o.pods {
 		switch p.Status {
-		case "CrashLoopBackOff", "ImagePullBackOff", "Error", "OOMKilled", "Failed":
-			issues = append(issues, fmt.Sprintf("%s: %s", p.Name, p.Status))
+		case "CrashLoopBackOff":
+			crashLoop++
+		case "ImagePullBackOff", "ErrImagePull":
+			imagePull++
+		case "OOMKilled":
+			oomKilled++
+		case "Error", "Failed":
+			otherFailed++
+		}
+		if p.OOMKilled && p.Status != "OOMKilled" {
+			oomKilled++
 		}
 	}
+
+	issueCount := crashLoop + imagePull + oomKilled + otherFailed
+	if issueCount == 0 {
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓ All healthy"))
+	} else {
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorRed).Render(
+			fmt.Sprintf("⚠ %d issue(s)", issueCount)))
+	}
+
+	lines = append(lines, "")
+
+	// Total restarts
+	var totalRestarts int32
+	for _, p := range o.pods {
+		totalRestarts += p.Restarts
+	}
+	if totalRestarts > 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colorYellow).Render(
+			fmt.Sprintf("↻ Restarts     %d", totalRestarts)))
+	} else {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colorDimText).Render("↻ Restarts     0"))
+	}
+
+	// Breakdown of issue types
+	if crashLoop > 0 {
+		lines = append(lines, StyleFailed.Render(fmt.Sprintf("⟳ CrashLoop    %d", crashLoop)))
+	}
+	if imagePull > 0 {
+		lines = append(lines, StyleFailed.Render(fmt.Sprintf("✗ ImagePull    %d", imagePull)))
+	}
+	if oomKilled > 0 {
+		lines = append(lines, StyleFailed.Render(fmt.Sprintf("✗ OOMKilled    %d", oomKilled)))
+	}
+
+	return CardStyle.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+// --- Attention Section ---
+
+func (o OverviewModel) renderAttention() string {
+	type issue struct {
+		icon     string
+		pod      string
+		reason   string
+		detail   string
+		severity int // 0=critical, 1=warning
+	}
+
+	var issues []issue
+
+	for _, p := range o.pods {
+		switch p.Status {
+		case "CrashLoopBackOff":
+			detail := fmt.Sprintf("%d restarts", p.Restarts)
+			issues = append(issues, issue{"⟳", p.Name, "CrashLoopBackOff", detail, 0})
+		case "OOMKilled":
+			detail := ""
+			if p.Resources.MemLim != "" {
+				detail = "limit: " + p.Resources.MemLim
+			}
+			issues = append(issues, issue{"✗", p.Name, "OOMKilled", detail, 0})
+		case "ImagePullBackOff", "ErrImagePull":
+			detail := ""
+			if len(p.Containers) > 0 {
+				detail = p.Containers[0].Image
+			}
+			issues = append(issues, issue{"✗", p.Name, p.Status, detail, 0})
+		case "Error", "Failed":
+			issues = append(issues, issue{"✗", p.Name, p.Status, "", 0})
+		case "Pending", "ContainerCreating":
+			issues = append(issues, issue{"◌", p.Name, p.Status, "", 1})
+		}
+		// Detect recovered OOM (running but was OOMKilled)
+		if p.OOMKilled && p.Status == "Running" {
+			detail := fmt.Sprintf("recovered, %d restarts", p.Restarts)
+			if p.Resources.MemLim != "" {
+				detail += ", limit: " + p.Resources.MemLim
+			}
+			issues = append(issues, issue{"⚡", p.Name, "OOMKilled (recovered)", detail, 1})
+		}
+	}
+
+	// Under-replicated deployments
 	for _, d := range o.deployments {
 		if d.Available < d.Desired {
-			issues = append(issues, fmt.Sprintf("%s: %d/%d ready", d.Name, d.Available, d.Desired))
+			detail := fmt.Sprintf("%d/%d available", d.Available, d.Desired)
+			issues = append(issues, issue{"▾", d.Name, "Under-replicated", detail, 1})
+		}
+	}
+
+	// Top restarters (pods with high restarts but currently Running)
+	type restarter struct {
+		name     string
+		restarts int32
+	}
+	var restarters []restarter
+	for _, p := range o.pods {
+		if p.Status == "Running" && p.Restarts >= 5 {
+			restarters = append(restarters, restarter{p.Name, p.Restarts})
+		}
+	}
+	sort.Slice(restarters, func(i, j int) bool {
+		return restarters[i].restarts > restarters[j].restarts
+	})
+	for i, r := range restarters {
+		if i >= 3 {
+			break
+		}
+		// Only add if not already listed as a problem
+		alreadyListed := false
+		for _, iss := range issues {
+			if iss.pod == r.name {
+				alreadyListed = true
+				break
+			}
+		}
+		if !alreadyListed {
+			issues = append(issues, issue{"↻", r.name,
+				fmt.Sprintf("%d restarts", r.restarts), "running but unstable", 1})
 		}
 	}
 
 	if len(issues) == 0 {
-		lines = append(lines, StyleRunning.Render("✓ All systems healthy"))
-	} else {
-		lines = append(lines, StyleFailed.Render(fmt.Sprintf("⚠ %d issue(s)", len(issues))))
-		lines = append(lines, "")
-		for i, issue := range issues {
-			if i >= 5 {
-				lines = append(lines, StyleWarning.Render(fmt.Sprintf("  +%d more...", len(issues)-5)))
-				break
-			}
-			lines = append(lines, StyleFailed.Render("  • "+issue))
-		}
+		return ""
 	}
 
-	content := strings.Join(lines, "\n")
-	return CardStyle.Render(content)
-}
+	// Sort: critical first, then warning
+	sort.SliceStable(issues, func(i, j int) bool {
+		return issues[i].severity < issues[j].severity
+	})
 
-func (o OverviewModel) renderOOMCard(events []k8s.OOMEvent) string {
-	oomStyle := lipgloss.NewStyle().
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorRed)
+	nameStyle := lipgloss.NewStyle().Foreground(colorWhite).Bold(true)
+	reasonStyle := lipgloss.NewStyle().Foreground(colorRed)
+	warnReasonStyle := lipgloss.NewStyle().Foreground(colorYellow)
+	detailStyle := lipgloss.NewStyle().Foreground(colorDimText)
+
+	var lines []string
+	lines = append(lines, titleStyle.Render("NEEDS ATTENTION"))
+	lines = append(lines, "")
+
+	for i, iss := range issues {
+		if i >= 10 {
+			lines = append(lines, detailStyle.Render(fmt.Sprintf("  +%d more...", len(issues)-10)))
+			break
+		}
+		rs := reasonStyle
+		if iss.severity > 0 {
+			rs = warnReasonStyle
+		}
+		line := "  " + rs.Render(iss.icon) + " " + nameStyle.Render(iss.pod) + "  " + rs.Render(iss.reason)
+		if iss.detail != "" {
+			line += "  " + detailStyle.Render(iss.detail)
+		}
+		lines = append(lines, line)
+	}
+
+	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorRed).
+		BorderForeground(colorSubtle).
 		Padding(1, 3).
 		Width(o.width - 6)
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(colorRed)
+	return boxStyle.Render(strings.Join(lines, "\n"))
+}
 
-	var lines []string
-	lines = append(lines, titleStyle.Render(fmt.Sprintf("OOMKilled: %d container(s) ran out of memory", len(events))))
-	lines = append(lines, "")
+// --- Recent Warnings ---
 
-	for i, e := range events {
-		if i >= 8 {
-			lines = append(lines, StyleWarning.Render(fmt.Sprintf("  +%d more...", len(events)-8)))
-			break
+func (o OverviewModel) renderRecentWarnings() string {
+	var warnings []k8s.EventInfo
+	for _, e := range o.events {
+		if e.Type == "Warning" {
+			warnings = append(warnings, e)
 		}
-		detail := StyleFailed.Render(fmt.Sprintf("  %s", e.PodName))
-		info := fmt.Sprintf("  container: %s", e.ContainerName)
-		if e.MemLim != "" {
-			info += fmt.Sprintf("  limit: %s", e.MemLim)
-		}
-		if e.Ago != "" {
-			info += fmt.Sprintf("  (%s)", e.Ago)
-		}
-		if e.Restarts > 0 {
-			info += fmt.Sprintf("  restarts: %d", e.Restarts)
-		}
-		lines = append(lines, detail)
-		lines = append(lines, lipgloss.NewStyle().Foreground(colorDimText).Render(info))
 	}
 
-	return oomStyle.Render(strings.Join(lines, "\n"))
+	if len(warnings) == 0 {
+		return ""
+	}
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorYellow)
+	reasonStyle := lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
+	objStyle := lipgloss.NewStyle().Foreground(colorWhite)
+	msgStyle := lipgloss.NewStyle().Foreground(colorDimText)
+	ageStyle := lipgloss.NewStyle().Foreground(colorDimText)
+
+	var lines []string
+	lines = append(lines, titleStyle.Render("RECENT WARNINGS"))
+	lines = append(lines, "")
+
+	shown := 0
+	for _, w := range warnings {
+		if shown >= 5 {
+			lines = append(lines, msgStyle.Render(fmt.Sprintf("  +%d more (see Events tab)", len(warnings)-5)))
+			break
+		}
+
+		age := formatAge(w.Age)
+		countStr := ""
+		if w.Count > 1 {
+			countStr = fmt.Sprintf(" (x%d)", w.Count)
+		}
+
+		lines = append(lines, "  "+reasonStyle.Render(w.Reason)+" "+objStyle.Render(w.Object)+
+			ageStyle.Render(" "+age+countStr))
+
+		// Truncate message
+		msg := w.Message
+		maxMsgLen := o.width - 16
+		if maxMsgLen > 80 {
+			maxMsgLen = 80
+		}
+		if len(msg) > maxMsgLen {
+			msg = msg[:maxMsgLen-3] + "..."
+		}
+		lines = append(lines, "    "+msgStyle.Render(msg))
+
+		shown++
+	}
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorSubtle).
+		Padding(1, 3).
+		Width(o.width - 6)
+
+	return boxStyle.Render(strings.Join(lines, "\n"))
+}
+
+// --- Helpers ---
+
+func renderStatusBar(width, total, green, yellow, red, gray int) string {
+	if total == 0 || width <= 0 {
+		return ""
+	}
+
+	gw := green * width / total
+	yw := yellow * width / total
+	rw := red * width / total
+	grw := gray * width / total
+
+	if green > 0 && gw == 0 {
+		gw = 1
+	}
+	if yellow > 0 && yw == 0 {
+		yw = 1
+	}
+	if red > 0 && rw == 0 {
+		rw = 1
+	}
+	if gray > 0 && grw == 0 {
+		grw = 1
+	}
+
+	used := gw + yw + rw + grw
+	if used < width {
+		diff := width - used
+		switch {
+		case green >= yellow && green >= red && green >= gray:
+			gw += diff
+		case yellow >= green && yellow >= red && yellow >= gray:
+			yw += diff
+		case red >= green && red >= yellow && red >= gray:
+			rw += diff
+		default:
+			grw += diff
+		}
+	}
+
+	var bar string
+	if gw > 0 {
+		bar += lipgloss.NewStyle().Background(colorGreen).Foreground(colorGreen).Render(strings.Repeat("█", gw))
+	}
+	if yw > 0 {
+		bar += lipgloss.NewStyle().Background(colorYellow).Foreground(colorYellow).Render(strings.Repeat("█", yw))
+	}
+	if rw > 0 {
+		bar += lipgloss.NewStyle().Background(colorRed).Foreground(colorRed).Render(strings.Repeat("█", rw))
+	}
+	if grw > 0 {
+		bar += lipgloss.NewStyle().Background(colorGray).Foreground(colorGray).Render(strings.Repeat("█", grw))
+	}
+
+	return bar
 }

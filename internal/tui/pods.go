@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -21,6 +22,8 @@ type PodsModel struct {
 	metricsAvail bool
 	filter       string
 	filtering    bool
+	sortCol      int  // index into sortable column names
+	sortAsc      bool // true = ascending
 }
 
 func NewPodsModel(allNS bool, metricsAvail bool) PodsModel {
@@ -121,6 +124,16 @@ func (p *PodsModel) handleNav(msg tea.KeyMsg) {
 		if p.cursor < p.offset {
 			p.offset = p.cursor
 		}
+	case "s":
+		cols := p.sortableColumns()
+		p.sortCol = (p.sortCol + 1) % len(cols)
+		p.sortAsc = true
+		p.cursor = 0
+		p.offset = 0
+	case "S":
+		p.sortAsc = !p.sortAsc
+		p.cursor = 0
+		p.offset = 0
 	}
 }
 
@@ -167,9 +180,18 @@ func (p PodsModel) View() string {
 
 func (p PodsModel) renderHeader() string {
 	cols := p.columns()
+	activeSort := p.activeSortCol()
 	var parts []string
 	for _, col := range cols {
-		parts = append(parts, TableHeaderStyle.Width(col.width).Render(col.name))
+		label := col.name
+		if col.name == activeSort {
+			if p.sortAsc {
+				label += " ▲"
+			} else {
+				label += " ▼"
+			}
+		}
+		parts = append(parts, TableHeaderStyle.Width(col.width).Render(label))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
@@ -295,19 +317,58 @@ func (p PodsModel) rowValues(pod k8s.PodInfo) []string {
 	return vals
 }
 
-func (p PodsModel) filteredPods() []k8s.PodInfo {
-	if p.filter == "" {
-		return p.pods
+func (p PodsModel) sortableColumns() []string {
+	return []string{"NAME", "STATUS", "RESTARTS", "AGE"}
+}
+
+func (p PodsModel) activeSortCol() string {
+	cols := p.sortableColumns()
+	if p.sortCol < len(cols) {
+		return cols[p.sortCol]
 	}
-	filter := strings.ToLower(p.filter)
+	return ""
+}
+
+func (p PodsModel) filteredPods() []k8s.PodInfo {
 	var result []k8s.PodInfo
-	for _, pod := range p.pods {
-		if strings.Contains(strings.ToLower(pod.Name), filter) ||
-			strings.Contains(strings.ToLower(pod.Status), filter) ||
-			strings.Contains(strings.ToLower(pod.Namespace), filter) {
-			result = append(result, pod)
+	if p.filter == "" {
+		result = make([]k8s.PodInfo, len(p.pods))
+		copy(result, p.pods)
+	} else {
+		filter := strings.ToLower(p.filter)
+		for _, pod := range p.pods {
+			if strings.Contains(strings.ToLower(pod.Name), filter) ||
+				strings.Contains(strings.ToLower(pod.Status), filter) ||
+				strings.Contains(strings.ToLower(pod.Namespace), filter) {
+				result = append(result, pod)
+			}
 		}
 	}
+
+	// Apply sort
+	col := p.activeSortCol()
+	if col != "" {
+		sort.SliceStable(result, func(i, j int) bool {
+			var less bool
+			switch col {
+			case "NAME":
+				less = result[i].Name < result[j].Name
+			case "STATUS":
+				less = result[i].Status < result[j].Status
+			case "RESTARTS":
+				less = result[i].Restarts < result[j].Restarts
+			case "AGE":
+				less = result[i].Age < result[j].Age
+			default:
+				return false
+			}
+			if !p.sortAsc {
+				return !less
+			}
+			return less
+		})
+	}
+
 	return result
 }
 

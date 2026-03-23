@@ -433,12 +433,22 @@ func (l LogsModel) View() string {
 
 				// Style with match highlighting
 				var styled string
-				if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
-					styled = highlightMatches(line, l.filterRegex, StyleFailed)
-				} else if containsLogLevel(line, "warn", "WARN") {
-					styled = highlightMatches(line, l.filterRegex, StyleWarning)
+				if l.multiPod {
+					if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
+						styled = renderPodLineHighlighted(line, l.filterRegex, StyleFailed)
+					} else if containsLogLevel(line, "warn", "WARN") {
+						styled = renderPodLineHighlighted(line, l.filterRegex, StyleWarning)
+					} else {
+						styled = renderPodLineHighlighted(line, l.filterRegex, logLineStyle)
+					}
 				} else {
-					styled = highlightMatches(line, l.filterRegex, logLineStyle)
+					if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
+						styled = highlightMatches(line, l.filterRegex, StyleFailed)
+					} else if containsLogLevel(line, "warn", "WARN") {
+						styled = highlightMatches(line, l.filterRegex, StyleWarning)
+					} else {
+						styled = highlightMatches(line, l.filterRegex, logLineStyle)
+					}
 				}
 
 				// Mark current match with indicator
@@ -466,11 +476,22 @@ func (l LogsModel) View() string {
 				line = line[:maxLineWidth-3] + "..."
 			}
 
-			styled := logLineStyle.Render(line)
-			if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
-				styled = StyleFailed.Render(line)
-			} else if containsLogLevel(line, "warn", "WARN") {
-				styled = StyleWarning.Render(line)
+			var styled string
+			if l.multiPod {
+				if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
+					styled = renderPodLine(line, StyleFailed)
+				} else if containsLogLevel(line, "warn", "WARN") {
+					styled = renderPodLine(line, StyleWarning)
+				} else {
+					styled = renderPodLine(line, logLineStyle)
+				}
+			} else {
+				styled = logLineStyle.Render(line)
+				if containsLogLevel(line, "error", "fatal", "panic", "ERRO", "FATA") {
+					styled = StyleFailed.Render(line)
+				} else if containsLogLevel(line, "warn", "WARN") {
+					styled = StyleWarning.Render(line)
+				}
 			}
 			b.WriteString(lineNum + " " + styled + "\n")
 		}
@@ -541,4 +562,60 @@ func highlightMatches(line string, re *regexp.Regexp, baseStyle lipgloss.Style) 
 		result += baseStyle.Render(line[pos:])
 	}
 	return result
+}
+
+// podColorPalette — distinct colors that work well on dark backgrounds.
+var podColorPalette = []lipgloss.Color{
+	"#61AFEF", // blue
+	"#E5C07B", // yellow
+	"#C678DD", // purple
+	"#56B6C2", // cyan
+	"#E06C75", // red
+	"#98C379", // green
+	"#D19A66", // orange
+	"#FF6AC1", // pink
+	"#7EC8E3", // light blue
+	"#C3E88D", // lime
+}
+
+// podTagColor returns a deterministic color for a pod tag based on hash.
+func podTagColor(tag string) lipgloss.Color {
+	var h uint32
+	for _, c := range tag {
+		h = h*31 + uint32(c)
+	}
+	return podColorPalette[h%uint32(len(podColorPalette))]
+}
+
+// renderPodLine renders a multi-pod log line with a colored [pod-id] prefix.
+func renderPodLine(line string, baseStyle lipgloss.Style) string {
+	// Parse "[tag] rest" format
+	if len(line) < 3 || line[0] != '[' {
+		return baseStyle.Render(line)
+	}
+	end := strings.Index(line, "] ")
+	if end == -1 {
+		return baseStyle.Render(line)
+	}
+	tag := line[1:end]
+	rest := line[end+2:]
+
+	tagStyle := lipgloss.NewStyle().Foreground(podTagColor(tag)).Bold(true)
+	return tagStyle.Render("["+tag+"]") + " " + baseStyle.Render(rest)
+}
+
+// renderPodLineHighlighted renders a multi-pod log line with colored prefix and grep highlights.
+func renderPodLineHighlighted(line string, re *regexp.Regexp, baseStyle lipgloss.Style) string {
+	if len(line) < 3 || line[0] != '[' {
+		return highlightMatches(line, re, baseStyle)
+	}
+	end := strings.Index(line, "] ")
+	if end == -1 {
+		return highlightMatches(line, re, baseStyle)
+	}
+	tag := line[1:end]
+	rest := line[end+2:]
+
+	tagStyle := lipgloss.NewStyle().Foreground(podTagColor(tag)).Bold(true)
+	return tagStyle.Render("["+tag+"]") + " " + highlightMatches(rest, re, baseStyle)
 }

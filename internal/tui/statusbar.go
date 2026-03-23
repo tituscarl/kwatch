@@ -31,6 +31,7 @@ func (s StatusBarModel) View() string {
 		{"l", "logs"},
 		{"esc", "back"},
 		{"/", "filter"},
+		{"s", "sort"},
 	}
 
 	var parts string

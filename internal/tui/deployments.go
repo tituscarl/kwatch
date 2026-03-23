@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -19,6 +20,8 @@ type DeploymentsModel struct {
 	allNS       bool
 	filter      string
 	filtering   bool
+	sortCol     int
+	sortAsc     bool
 }
 
 func NewDeploymentsModel(allNS bool) DeploymentsModel {
@@ -112,6 +115,16 @@ func (d *DeploymentsModel) handleNav(msg tea.KeyMsg) {
 		if d.cursor < d.offset {
 			d.offset = d.cursor
 		}
+	case "s":
+		cols := d.sortableColumns()
+		d.sortCol = (d.sortCol + 1) % len(cols)
+		d.sortAsc = true
+		d.cursor = 0
+		d.offset = 0
+	case "S":
+		d.sortAsc = !d.sortAsc
+		d.cursor = 0
+		d.offset = 0
 	}
 }
 
@@ -135,9 +148,18 @@ func (d DeploymentsModel) View() string {
 
 	// Header
 	cols := d.columns()
+	activeSort := d.activeSortCol()
 	var headerParts []string
 	for _, col := range cols {
-		headerParts = append(headerParts, TableHeaderStyle.Width(col.width).Render(col.name))
+		label := col.name
+		if col.name == activeSort {
+			if d.sortAsc {
+				label += " ▲"
+			} else {
+				label += " ▼"
+			}
+		}
+		headerParts = append(headerParts, TableHeaderStyle.Width(col.width).Render(label))
 	}
 	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, headerParts...) + "\n")
 
@@ -232,18 +254,56 @@ func (d DeploymentsModel) rowValues(dep k8s.DeploymentInfo) []string {
 	return vals
 }
 
-func (d DeploymentsModel) filteredDeployments() []k8s.DeploymentInfo {
-	if d.filter == "" {
-		return d.deployments
+func (d DeploymentsModel) sortableColumns() []string {
+	return []string{"NAME", "AVAILABLE", "AGE", "STRATEGY"}
+}
+
+func (d DeploymentsModel) activeSortCol() string {
+	cols := d.sortableColumns()
+	if d.sortCol < len(cols) {
+		return cols[d.sortCol]
 	}
-	filter := strings.ToLower(d.filter)
+	return ""
+}
+
+func (d DeploymentsModel) filteredDeployments() []k8s.DeploymentInfo {
 	var result []k8s.DeploymentInfo
-	for _, dep := range d.deployments {
-		if strings.Contains(strings.ToLower(dep.Name), filter) ||
-			strings.Contains(strings.ToLower(dep.Namespace), filter) {
-			result = append(result, dep)
+	if d.filter == "" {
+		result = make([]k8s.DeploymentInfo, len(d.deployments))
+		copy(result, d.deployments)
+	} else {
+		filter := strings.ToLower(d.filter)
+		for _, dep := range d.deployments {
+			if strings.Contains(strings.ToLower(dep.Name), filter) ||
+				strings.Contains(strings.ToLower(dep.Namespace), filter) {
+				result = append(result, dep)
+			}
 		}
 	}
+
+	col := d.activeSortCol()
+	if col != "" {
+		sort.SliceStable(result, func(i, j int) bool {
+			var less bool
+			switch col {
+			case "NAME":
+				less = result[i].Name < result[j].Name
+			case "AVAILABLE":
+				less = result[i].Available < result[j].Available
+			case "AGE":
+				less = result[i].Age < result[j].Age
+			case "STRATEGY":
+				less = result[i].Strategy < result[j].Strategy
+			default:
+				return false
+			}
+			if !d.sortAsc {
+				return !less
+			}
+			return less
+		})
+	}
+
 	return result
 }
 
