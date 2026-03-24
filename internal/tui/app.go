@@ -333,8 +333,8 @@ func (a *App) renderTabs() string {
 }
 
 func (a *App) contentHeight() int {
-	// total height minus header(1), tab bar(2), status bar(1), some padding
-	h := a.height - 5
+	// total height minus header(2), tab bar(2), status bar(1), some padding
+	h := a.height - 6
 	if h < 5 {
 		h = 5
 	}

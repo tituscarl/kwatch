@@ -34,13 +34,13 @@ func (h HeaderModel) View() string {
 	}
 	ns := HeaderLabelStyle.Render("ns:") + " " + HeaderValueStyle.Render(nsDisplay)
 
-	sep := lipgloss.NewStyle().Foreground(colorSubtle).Render("  │  ")
-
-	header := logo + sep + cluster + sep + ctx + sep + ns
-
-	return lipgloss.NewStyle().
+	bgStyle := lipgloss.NewStyle().
 		Width(h.width).
 		Background(lipgloss.Color("#1A1A2E")).
-		Padding(0, 1).
-		Render(header)
+		Padding(0, 1)
+
+	line1 := logo + "  " + cluster
+	line2 := "          " + ctx + "  " + ns
+
+	return bgStyle.Render(line1 + "\n" + line2)
 }
