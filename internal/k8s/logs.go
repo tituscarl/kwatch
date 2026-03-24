@@ -22,8 +22,9 @@ type logEntry struct {
 // GetPodLogs fetches the last N lines of logs for a pod container (read-only).
 func (c *Client) GetPodLogs(namespace, podName, container string, tailLines int64) (string, error) {
 	opts := &corev1.PodLogOptions{
-		TailLines: &tailLines,
-		Container: container,
+		TailLines:  &tailLines,
+		Container:  container,
+		Timestamps: true,
 	}
 
 	req := c.clientset.CoreV1().Pods(namespace).GetLogs(podName, opts)
@@ -38,16 +39,26 @@ func (c *Client) GetPodLogs(namespace, podName, container string, tailLines int6
 		return "", fmt.Errorf("failed to read logs: %w", err)
 	}
 
-	return string(bytes), nil
+	// Format timestamps from RFC3339Nano to short form
+	raw := strings.TrimRight(string(bytes), "\n")
+	lines := strings.Split(raw, "\n")
+	for i, line := range lines {
+		ts, text := parseTimestampedLine(line)
+		if !ts.IsZero() {
+			lines[i] = ts.Local().Format("01-02 15:04:05 MST") + " " + text
+		}
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 // FollowPodLogs streams logs in real-time, sending each line to the channel.
 // It blocks until the context is cancelled. The channel is closed when done.
 func (c *Client) FollowPodLogs(ctx context.Context, namespace, podName, container string, tailLines int64, ch chan<- string) error {
 	opts := &corev1.PodLogOptions{
-		TailLines: &tailLines,
-		Container: container,
-		Follow:    true,
+		TailLines:  &tailLines,
+		Container:  container,
+		Follow:     true,
+		Timestamps: true,
 	}
 
 	req := c.clientset.CoreV1().Pods(namespace).GetLogs(podName, opts)
@@ -63,10 +74,15 @@ func (c *Client) FollowPodLogs(ctx context.Context, namespace, podName, containe
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
+		line := scanner.Text()
+		ts, text := parseTimestampedLine(line)
+		if !ts.IsZero() {
+			line = ts.Local().Format("01-02 15:04:05 MST") + " " + text
+		}
 		select {
 		case <-ctx.Done():
 			return nil
-		case ch <- scanner.Text():
+		case ch <- line:
 		}
 	}
 
@@ -161,7 +177,11 @@ func (c *Client) GetMultiPodLogs(namespace string, pods []PodInfo, tailLines int
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "[%s] %s", e.pod, e.text)
+		ts := ""
+		if !e.timestamp.IsZero() {
+			ts = e.timestamp.Local().Format("01-02 15:04:05 MST") + " "
+		}
+		fmt.Fprintf(&b, "[%s] %s%s", e.pod, ts, e.text)
 	}
 	return b.String(), nil
 }
@@ -216,8 +236,12 @@ func (c *Client) FollowMultiPodLogs(ctx context.Context, namespace string, pods 
 			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 			for scanner.Scan() {
-				_, text := parseTimestampedLine(scanner.Text())
-				line := fmt.Sprintf("[%s] %s", tag, text)
+				ts, text := parseTimestampedLine(scanner.Text())
+				tsStr := ""
+				if !ts.IsZero() {
+					tsStr = ts.Local().Format("01-02 15:04:05 MST") + " "
+				}
+				line := fmt.Sprintf("[%s] %s%s", tag, tsStr, text)
 				select {
 				case <-ctx.Done():
 					return

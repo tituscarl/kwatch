@@ -431,10 +431,6 @@ func (l LogsModel) View() string {
 				isWarn := containsLogLevel(fullLine, "warn", "WARN") || isKlogWarn(fullLine)
 
 				line := fullLine
-				maxLineWidth := l.width - lineNumWidth - 7
-				if maxLineWidth > 0 && len(line) > maxLineWidth {
-					line = line[:maxLineWidth-3] + "..."
-				}
 
 				// Style with match highlighting
 				var styled string
@@ -481,10 +477,6 @@ func (l LogsModel) View() string {
 			isWarn := containsLogLevel(fullLine, "warn", "WARN") || isKlogWarn(fullLine)
 
 			line := fullLine
-			maxLineWidth := l.width - lineNumWidth - 6
-			if maxLineWidth > 0 && len(line) > maxLineWidth {
-				line = line[:maxLineWidth-3] + "..."
-			}
 
 			var styled string
 			if l.multiPod {
