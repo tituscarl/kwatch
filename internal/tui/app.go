@@ -182,27 +182,32 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		switch {
-		case key.Matches(msg, Keys.Quit):
-			return a, tea.Quit
-		case key.Matches(msg, Keys.Tab1):
-			a.activeTab = tabOverview
-		case key.Matches(msg, Keys.Tab2):
-			a.activeTab = tabPods
-		case key.Matches(msg, Keys.Tab3):
-			a.activeTab = tabDeployments
-		case key.Matches(msg, Keys.Tab4):
-			a.activeTab = tabEvents
-		case key.Matches(msg, Keys.NextTab):
-			a.activeTab = (a.activeTab + 1) % len(tabNames)
-		case key.Matches(msg, Keys.PrevTab):
-			a.activeTab = (a.activeTab - 1 + len(tabNames)) % len(tabNames)
-		case key.Matches(msg, Keys.Enter):
-			cmds = append(cmds, a.handleEnter())
-		case key.Matches(msg, Keys.Logs):
-			cmds = append(cmds, a.handleLogs())
-		default:
+		// If a tab is in filter mode, send all keys to the tab
+		if a.isFiltering() {
 			cmds = append(cmds, a.updateActiveTab(msg))
+		} else {
+			switch {
+			case key.Matches(msg, Keys.Quit):
+				return a, tea.Quit
+			case key.Matches(msg, Keys.Tab1):
+				a.activeTab = tabOverview
+			case key.Matches(msg, Keys.Tab2):
+				a.activeTab = tabPods
+			case key.Matches(msg, Keys.Tab3):
+				a.activeTab = tabDeployments
+			case key.Matches(msg, Keys.Tab4):
+				a.activeTab = tabEvents
+			case key.Matches(msg, Keys.NextTab):
+				a.activeTab = (a.activeTab + 1) % len(tabNames)
+			case key.Matches(msg, Keys.PrevTab):
+				a.activeTab = (a.activeTab - 1 + len(tabNames)) % len(tabNames)
+			case key.Matches(msg, Keys.Enter):
+				cmds = append(cmds, a.handleEnter())
+			case key.Matches(msg, Keys.Logs):
+				cmds = append(cmds, a.handleLogs())
+			default:
+				cmds = append(cmds, a.updateActiveTab(msg))
+			}
 		}
 
 	case PodsUpdatedMsg:
@@ -332,6 +337,16 @@ func (a *App) renderTabs() string {
 	}
 	row := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 	return TabBarStyle.Width(a.width).Render(row)
+}
+
+func (a *App) isFiltering() bool {
+	switch a.activeTab {
+	case tabPods:
+		return a.pods.filtering
+	case tabDeployments:
+		return a.deployments.filtering
+	}
+	return false
 }
 
 func (a *App) contentHeight() int {
