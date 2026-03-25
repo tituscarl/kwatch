@@ -18,17 +18,18 @@ type DeploymentResourceStats struct {
 }
 
 type DeploymentsModel struct {
-	deployments   []k8s.DeploymentInfo
-	resourceStats map[string]DeploymentResourceStats // key: namespace/name
-	cursor        int
-	offset        int
-	width         int
-	height        int
-	allNS         bool
-	filter        string
-	filtering     bool
-	sortCol       int
-	sortAsc       bool
+	deployments      []k8s.DeploymentInfo
+	resourceStats    map[string]DeploymentResourceStats // key: namespace/name
+	resourcesLoaded  bool                               // true after first stats update
+	cursor           int
+	offset           int
+	width            int
+	height           int
+	allNS            bool
+	filter           string
+	filtering        bool
+	sortCol          int
+	sortAsc          bool
 }
 
 func NewDeploymentsModel(allNS bool) DeploymentsModel {
@@ -37,6 +38,7 @@ func NewDeploymentsModel(allNS bool) DeploymentsModel {
 
 func (d *DeploymentsModel) UpdateResourceStats(pods []k8s.PodInfo, metrics map[string]k8s.PodMetrics) {
 	stats := make(map[string]DeploymentResourceStats)
+	hasMetrics := metrics != nil && len(metrics) > 0
 	// Group pods by deployment name prefix
 	for _, dep := range d.deployments {
 		var totalUsageBytes, totalLimitBytes int64
@@ -51,21 +53,34 @@ func (d *DeploymentsModel) UpdateResourceStats(pods []k8s.PodInfo, metrics map[s
 			// Memory limit from pod spec
 			totalLimitBytes += parseMemToBytes(pod.Resources.MemLim)
 			// Memory usage from metrics
-			if metrics != nil {
+			if hasMetrics {
 				key := pod.Namespace + "/" + pod.Name
 				if m, ok := metrics[key]; ok {
 					totalUsageBytes += parseMemToBytes(m.Memory)
 				}
 			}
 		}
-		if totalLimitBytes > 0 || totalUsageBytes > 0 {
+
+		memUsage := ""
+		if !hasMetrics {
+			memUsage = "..."
+		} else if totalUsageBytes > 0 {
+			memUsage = formatBytesShort(totalUsageBytes)
+		}
+		memLimit := ""
+		if totalLimitBytes > 0 {
+			memLimit = formatBytesShort(totalLimitBytes)
+		}
+
+		if memUsage != "" || memLimit != "" {
 			stats[dep.Namespace+"/"+dep.Name] = DeploymentResourceStats{
-				MemUsage: formatBytesShort(totalUsageBytes),
-				MemLimit: formatBytesShort(totalLimitBytes),
+				MemUsage: memUsage,
+				MemLimit: memLimit,
 			}
 		}
 	}
 	d.resourceStats = stats
+	d.resourcesLoaded = true
 }
 
 func (d *DeploymentsModel) UpdateDeployments(deps []k8s.DeploymentInfo) {
@@ -267,18 +282,8 @@ func (d DeploymentsModel) columns() []column {
 		nameWidth = 24
 	}
 
-	fixedWidth := 12 + 12 + 12 + 12 + 12 + 10 + 10 // READY + UPTODATE + AVAIL + MEM + MEMLIM + AGE + DEPLOYED
-	if d.allNS {
-		fixedWidth += 16
-	}
-	imageWidth := d.width - nameWidth - fixedWidth - 6
-	if imageWidth < 20 {
-		imageWidth = 20
-	}
-
 	cols = append(cols,
 		column{"NAME", nameWidth},
-		column{"IMAGE", imageWidth},
 		column{"READY", 12},
 		column{"UP-TO-DATE", 12},
 		column{"AVAILABLE", 12},
@@ -306,12 +311,8 @@ func (d DeploymentsModel) rowValues(dep k8s.DeploymentInfo) []string {
 		}
 	}
 
-	// Show images joined by comma, strip common registry prefixes for brevity
-	image := strings.Join(dep.Images, ", ")
-
 	cols := d.columns()
 	nameIdx := len(vals)
-	imageIdx := nameIdx + 1
 
 	deployed := ""
 	if dep.LastDeploy > 0 {
@@ -320,7 +321,6 @@ func (d DeploymentsModel) rowValues(dep k8s.DeploymentInfo) []string {
 
 	vals = append(vals,
 		truncate(dep.Name, cols[nameIdx].width-2),
-		truncate(image, cols[imageIdx].width-2),
 		dep.Ready,
 		fmt.Sprintf("%d", dep.UpToDate),
 		fmt.Sprintf("%d", dep.Available),

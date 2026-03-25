@@ -114,6 +114,17 @@ func (d *DetailModel) ShowDeployment(dep k8s.DeploymentInfo) {
 	b.WriteString(DetailLabelStyle.Render("Desired:    ") + fmt.Sprintf("%d", dep.Desired) + "\n")
 	b.WriteString(DetailLabelStyle.Render("Strategy:   ") + dep.Strategy + "\n")
 	b.WriteString(DetailLabelStyle.Render("Age:        ") + formatAge(dep.Age) + "\n")
+	if dep.LastDeploy > 0 {
+		b.WriteString(DetailLabelStyle.Render("Deployed:   ") + formatAge(dep.LastDeploy) + " ago\n")
+	}
+
+	// Images
+	if len(dep.Images) > 0 {
+		b.WriteString("\n" + DetailLabelStyle.Render("Images:") + "\n")
+		for _, img := range dep.Images {
+			b.WriteString("  " + img + "\n")
+		}
+	}
 
 	// Health status
 	b.WriteString("\n" + DetailLabelStyle.Render("Health:") + "\n")
