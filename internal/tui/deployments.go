@@ -267,15 +267,25 @@ func (d DeploymentsModel) columns() []column {
 		nameWidth = 24
 	}
 
+	fixedWidth := 12 + 12 + 12 + 12 + 12 + 10 + 10 // READY + UPTODATE + AVAIL + MEM + MEMLIM + AGE + DEPLOYED
+	if d.allNS {
+		fixedWidth += 16
+	}
+	imageWidth := d.width - nameWidth - fixedWidth - 6
+	if imageWidth < 20 {
+		imageWidth = 20
+	}
+
 	cols = append(cols,
 		column{"NAME", nameWidth},
-		column{"READY", 10},
+		column{"IMAGE", imageWidth},
+		column{"READY", 12},
 		column{"UP-TO-DATE", 12},
 		column{"AVAILABLE", 12},
-		column{"MEM", 10},
-		column{"MEM LIM", 10},
+		column{"MEM", 12},
+		column{"MEM LIM", 12},
 		column{"AGE", 10},
-		column{"STRATEGY", 18},
+		column{"DEPLOYED", 10},
 	)
 	return cols
 }
@@ -296,21 +306,34 @@ func (d DeploymentsModel) rowValues(dep k8s.DeploymentInfo) []string {
 		}
 	}
 
+	// Show images joined by comma, strip common registry prefixes for brevity
+	image := strings.Join(dep.Images, ", ")
+
+	cols := d.columns()
+	nameIdx := len(vals)
+	imageIdx := nameIdx + 1
+
+	deployed := ""
+	if dep.LastDeploy > 0 {
+		deployed = formatAge(dep.LastDeploy)
+	}
+
 	vals = append(vals,
-		truncate(dep.Name, d.columns()[len(vals)].width-2),
+		truncate(dep.Name, cols[nameIdx].width-2),
+		truncate(image, cols[imageIdx].width-2),
 		dep.Ready,
 		fmt.Sprintf("%d", dep.UpToDate),
 		fmt.Sprintf("%d", dep.Available),
 		memUsage,
 		memLimit,
 		formatAge(dep.Age),
-		dep.Strategy,
+		deployed,
 	)
 	return vals
 }
 
 func (d DeploymentsModel) sortableColumns() []string {
-	return []string{"NAME", "AVAILABLE", "AGE", "STRATEGY"}
+	return []string{"NAME", "AVAILABLE", "AGE", "DEPLOYED"}
 }
 
 func (d DeploymentsModel) activeSortCol() string {
@@ -347,8 +370,8 @@ func (d DeploymentsModel) filteredDeployments() []k8s.DeploymentInfo {
 				less = result[i].Available < result[j].Available
 			case "AGE":
 				less = result[i].Age < result[j].Age
-			case "STRATEGY":
-				less = result[i].Strategy < result[j].Strategy
+			case "DEPLOYED":
+				less = result[i].LastDeploy < result[j].LastDeploy
 			default:
 				return false
 			}

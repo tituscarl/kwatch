@@ -49,14 +49,16 @@ type PodResources struct {
 }
 
 type DeploymentInfo struct {
-	Name      string
-	Namespace string
-	Ready     string // "3/3" format
-	UpToDate  int32
-	Available int32
-	Desired   int32
-	Age       time.Duration
-	Strategy  string
+	Name       string
+	Namespace  string
+	Ready      string // "3/3" format
+	UpToDate   int32
+	Available  int32
+	Desired    int32
+	Age        time.Duration
+	LastDeploy time.Duration // time since last rollout (newest ReplicaSet)
+	Strategy   string
+	Images     []string // container images from pod template
 }
 
 type EventInfo struct {
