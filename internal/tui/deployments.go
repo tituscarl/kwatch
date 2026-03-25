@@ -11,21 +11,61 @@ import (
 	"github.com/tituscarl/kwatch/internal/k8s"
 )
 
+// DeploymentResourceStats holds aggregated resource info for a deployment.
+type DeploymentResourceStats struct {
+	MemUsage string // sum of pod memory usage from metrics
+	MemLimit string // sum of pod memory limits from spec
+}
+
 type DeploymentsModel struct {
-	deployments []k8s.DeploymentInfo
-	cursor      int
-	offset      int
-	width       int
-	height      int
-	allNS       bool
-	filter      string
-	filtering   bool
-	sortCol     int
-	sortAsc     bool
+	deployments   []k8s.DeploymentInfo
+	resourceStats map[string]DeploymentResourceStats // key: namespace/name
+	cursor        int
+	offset        int
+	width         int
+	height        int
+	allNS         bool
+	filter        string
+	filtering     bool
+	sortCol       int
+	sortAsc       bool
 }
 
 func NewDeploymentsModel(allNS bool) DeploymentsModel {
 	return DeploymentsModel{allNS: allNS}
+}
+
+func (d *DeploymentsModel) UpdateResourceStats(pods []k8s.PodInfo, metrics map[string]k8s.PodMetrics) {
+	stats := make(map[string]DeploymentResourceStats)
+	// Group pods by deployment name prefix
+	for _, dep := range d.deployments {
+		var totalUsageBytes, totalLimitBytes int64
+		prefix := dep.Name + "-"
+		for _, pod := range pods {
+			if pod.Namespace != dep.Namespace {
+				continue
+			}
+			if !strings.HasPrefix(pod.Name, prefix) {
+				continue
+			}
+			// Memory limit from pod spec
+			totalLimitBytes += parseMemToBytes(pod.Resources.MemLim)
+			// Memory usage from metrics
+			if metrics != nil {
+				key := pod.Namespace + "/" + pod.Name
+				if m, ok := metrics[key]; ok {
+					totalUsageBytes += parseMemToBytes(m.Memory)
+				}
+			}
+		}
+		if totalLimitBytes > 0 || totalUsageBytes > 0 {
+			stats[dep.Namespace+"/"+dep.Name] = DeploymentResourceStats{
+				MemUsage: formatBytesShort(totalUsageBytes),
+				MemLimit: formatBytesShort(totalLimitBytes),
+			}
+		}
+	}
+	d.resourceStats = stats
 }
 
 func (d *DeploymentsModel) UpdateDeployments(deps []k8s.DeploymentInfo) {
@@ -232,6 +272,8 @@ func (d DeploymentsModel) columns() []column {
 		column{"READY", 10},
 		column{"UP-TO-DATE", 12},
 		column{"AVAILABLE", 12},
+		column{"MEM", 10},
+		column{"MEM LIM", 10},
 		column{"AGE", 10},
 		column{"STRATEGY", 18},
 	)
@@ -243,11 +285,24 @@ func (d DeploymentsModel) rowValues(dep k8s.DeploymentInfo) []string {
 	if d.allNS {
 		vals = append(vals, truncate(dep.Namespace, 14))
 	}
+
+	memUsage := ""
+	memLimit := ""
+	if d.resourceStats != nil {
+		key := dep.Namespace + "/" + dep.Name
+		if s, ok := d.resourceStats[key]; ok {
+			memUsage = s.MemUsage
+			memLimit = s.MemLimit
+		}
+	}
+
 	vals = append(vals,
 		truncate(dep.Name, d.columns()[len(vals)].width-2),
 		dep.Ready,
 		fmt.Sprintf("%d", dep.UpToDate),
 		fmt.Sprintf("%d", dep.Available),
+		memUsage,
+		memLimit,
 		formatAge(dep.Age),
 		dep.Strategy,
 	)
@@ -316,4 +371,19 @@ func (d DeploymentsModel) visibleRows() int {
 		h = 1
 	}
 	return h
+}
+
+func formatBytesShort(b int64) string {
+	switch {
+	case b <= 0:
+		return ""
+	case b >= 1024*1024*1024:
+		return fmt.Sprintf("%.1fGi", float64(b)/(1024*1024*1024))
+	case b >= 1024*1024:
+		return fmt.Sprintf("%dMi", b/(1024*1024))
+	case b >= 1024:
+		return fmt.Sprintf("%dKi", b/(1024))
+	default:
+		return fmt.Sprintf("%dB", b)
+	}
 }

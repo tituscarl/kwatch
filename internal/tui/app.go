@@ -208,6 +208,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PodsUpdatedMsg:
 		a.pods.UpdatePods(msg.Pods)
 		a.overview.UpdatePods(msg.Pods)
+		a.deployments.UpdateResourceStats(msg.Pods, a.pods.metrics)
 		a.statusbar.lastRefresh = time.Now()
 		a.statusbar.err = nil
 
@@ -221,6 +222,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MetricsUpdatedMsg:
 		a.pods.UpdateMetrics(msg.Metrics)
+		a.deployments.UpdateResourceStats(a.pods.pods, msg.Metrics)
 
 	case DeploymentPodsMsg:
 		if msg.Err != nil {
