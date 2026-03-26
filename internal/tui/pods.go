@@ -109,6 +109,12 @@ func (p *PodsModel) handleNav(msg tea.KeyMsg) {
 				p.offset = p.cursor - visibleRows + 1
 			}
 		}
+	case "esc":
+		if p.filter != "" {
+			p.filter = ""
+			p.cursor = 0
+			p.offset = 0
+		}
 	case "/":
 		p.filtering = true
 		p.filter = ""

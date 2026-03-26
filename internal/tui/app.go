@@ -182,8 +182,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// If a tab is in filter mode, send all keys to the tab
+		// If actively typing in a filter, send all keys to the tab
 		if a.isFiltering() {
+			cmds = append(cmds, a.updateActiveTab(msg))
+		} else if key.Matches(msg, Keys.Escape) && a.hasActiveFilter() {
+			// Clear the active filter
 			cmds = append(cmds, a.updateActiveTab(msg))
 		} else {
 			switch {
@@ -339,12 +342,24 @@ func (a *App) renderTabs() string {
 	return TabBarStyle.Width(a.width).Render(row)
 }
 
+// isFiltering returns true only when the user is actively typing in a filter input.
 func (a *App) isFiltering() bool {
 	switch a.activeTab {
 	case tabPods:
 		return a.pods.filtering
 	case tabDeployments:
 		return a.deployments.filtering
+	}
+	return false
+}
+
+// hasActiveFilter returns true when a confirmed filter term is applied.
+func (a *App) hasActiveFilter() bool {
+	switch a.activeTab {
+	case tabPods:
+		return a.pods.filter != ""
+	case tabDeployments:
+		return a.deployments.filter != ""
 	}
 	return false
 }

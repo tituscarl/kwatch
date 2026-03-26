@@ -155,6 +155,12 @@ func (d *DeploymentsModel) handleNav(msg tea.KeyMsg) {
 				d.offset = d.cursor - visibleRows + 1
 			}
 		}
+	case "esc":
+		if d.filter != "" {
+			d.filter = ""
+			d.cursor = 0
+			d.offset = 0
+		}
 	case "/":
 		d.filtering = true
 		d.filter = ""

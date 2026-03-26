@@ -246,7 +246,8 @@ func (o OverviewModel) renderHealthCard(width int) string {
 func (o OverviewModel) renderAttention() string {
 	type issue struct {
 		icon     string
-		pod      string
+		kind     string // "pod" or "deploy"
+		name     string
 		reason   string
 		detail   string
 		severity int // 0=critical, 1=warning
@@ -258,23 +259,23 @@ func (o OverviewModel) renderAttention() string {
 		switch p.Status {
 		case "CrashLoopBackOff":
 			detail := fmt.Sprintf("%d restarts", p.Restarts)
-			issues = append(issues, issue{"⟳", p.Name, "CrashLoopBackOff", detail, 0})
+			issues = append(issues, issue{"⟳", "pod", p.Name, "CrashLoopBackOff", detail, 0})
 		case "OOMKilled":
 			detail := ""
 			if p.Resources.MemLim != "" {
 				detail = "limit: " + p.Resources.MemLim
 			}
-			issues = append(issues, issue{"✗", p.Name, "OOMKilled", detail, 0})
+			issues = append(issues, issue{"✗", "pod", p.Name, "OOMKilled", detail, 0})
 		case "ImagePullBackOff", "ErrImagePull":
 			detail := ""
 			if len(p.Containers) > 0 {
 				detail = p.Containers[0].Image
 			}
-			issues = append(issues, issue{"✗", p.Name, p.Status, detail, 0})
+			issues = append(issues, issue{"✗", "pod", p.Name, p.Status, detail, 0})
 		case "Error", "Failed":
-			issues = append(issues, issue{"✗", p.Name, p.Status, "", 0})
+			issues = append(issues, issue{"✗", "pod", p.Name, p.Status, "", 0})
 		case "Pending", "ContainerCreating":
-			issues = append(issues, issue{"◌", p.Name, p.Status, "", 1})
+			issues = append(issues, issue{"◌", "pod", p.Name, p.Status, "", 1})
 		}
 		// Detect recovered OOM (running but was OOMKilled)
 		if p.OOMKilled && p.Status == "Running" {
@@ -282,7 +283,7 @@ func (o OverviewModel) renderAttention() string {
 			if p.Resources.MemLim != "" {
 				detail += ", limit: " + p.Resources.MemLim
 			}
-			issues = append(issues, issue{"⚡", p.Name, "OOMKilled (recovered)", detail, 1})
+			issues = append(issues, issue{"⚡", "pod", p.Name, "OOMKilled (recovered)", detail, 1})
 		}
 	}
 
@@ -290,7 +291,7 @@ func (o OverviewModel) renderAttention() string {
 	for _, d := range o.deployments {
 		if d.Available < d.Desired {
 			detail := fmt.Sprintf("%d/%d available", d.Available, d.Desired)
-			issues = append(issues, issue{"▾", d.Name, "Under-replicated", detail, 1})
+			issues = append(issues, issue{"▾", "deploy", d.Name, "Under-replicated", detail, 1})
 		}
 	}
 
@@ -312,16 +313,15 @@ func (o OverviewModel) renderAttention() string {
 		if i >= 3 {
 			break
 		}
-		// Only add if not already listed as a problem
 		alreadyListed := false
 		for _, iss := range issues {
-			if iss.pod == r.name {
+			if iss.name == r.name {
 				alreadyListed = true
 				break
 			}
 		}
 		if !alreadyListed {
-			issues = append(issues, issue{"↻", r.name,
+			issues = append(issues, issue{"↻", "pod", r.name,
 				fmt.Sprintf("%d restarts", r.restarts), "running but unstable", 1})
 		}
 	}
@@ -340,6 +340,16 @@ func (o OverviewModel) renderAttention() string {
 	reasonStyle := lipgloss.NewStyle().Foreground(colorRed)
 	warnReasonStyle := lipgloss.NewStyle().Foreground(colorYellow)
 	detailStyle := lipgloss.NewStyle().Foreground(colorDimText)
+	podTagStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#000000")).
+		Background(colorGreen).
+		Bold(true).
+		Padding(0, 1)
+	deployTagStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#000000")).
+		Background(colorPurple).
+		Bold(true).
+		Padding(0, 1)
 
 	var lines []string
 	lines = append(lines, titleStyle.Render("NEEDS ATTENTION"))
@@ -354,7 +364,11 @@ func (o OverviewModel) renderAttention() string {
 		if iss.severity > 0 {
 			rs = warnReasonStyle
 		}
-		line := "  " + rs.Render(iss.icon) + " " + nameStyle.Render(iss.pod) + "  " + rs.Render(iss.reason)
+		tag := podTagStyle.Render("pod")
+		if iss.kind == "deploy" {
+			tag = deployTagStyle.Render("deployment")
+		}
+		line := "  " + rs.Render(iss.icon) + " " + tag + " " + nameStyle.Render(iss.name) + "  " + rs.Render(iss.reason)
 		if iss.detail != "" {
 			line += "  " + detailStyle.Render(iss.detail)
 		}
