@@ -47,7 +47,7 @@ func (o OverviewModel) View() string {
 	}
 
 	// Responsive card widths
-	cardWidth := (o.width - 10) / 3
+	cardWidth := (o.width - 14) / 3
 	if cardWidth < 24 {
 		cardWidth = 24
 	}
@@ -340,16 +340,9 @@ func (o OverviewModel) renderAttention() string {
 	reasonStyle := lipgloss.NewStyle().Foreground(colorRed)
 	warnReasonStyle := lipgloss.NewStyle().Foreground(colorYellow)
 	detailStyle := lipgloss.NewStyle().Foreground(colorDimText)
-	podTagStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#000000")).
-		Background(colorGreen).
-		Bold(true).
-		Padding(0, 1)
-	deployTagStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#000000")).
-		Background(colorPurple).
-		Bold(true).
-		Padding(0, 1)
+	tagStyle := lipgloss.NewStyle().
+		Foreground(colorDimText).
+		Bold(true)
 
 	var lines []string
 	lines = append(lines, titleStyle.Render("NEEDS ATTENTION"))
@@ -364,9 +357,9 @@ func (o OverviewModel) renderAttention() string {
 		if iss.severity > 0 {
 			rs = warnReasonStyle
 		}
-		tag := podTagStyle.Render("pod")
+		tag := tagStyle.Render("[pod]")
 		if iss.kind == "deploy" {
-			tag = deployTagStyle.Render("deployment")
+			tag = tagStyle.Render("[deployment]")
 		}
 		line := "  " + rs.Render(iss.icon) + " " + tag + " " + nameStyle.Render(iss.name) + "  " + rs.Render(iss.reason)
 		if iss.detail != "" {

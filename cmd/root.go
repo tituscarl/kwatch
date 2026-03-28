@@ -37,7 +37,7 @@ func init() {
 	rootCmd.Flags().StringVarP(&namespace, "namespace", "n", "", "Namespace to watch (default: kubeconfig default)")
 	rootCmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "Watch all namespaces")
 	rootCmd.Flags().IntVar(&refreshSecs, "refresh", 5, "Refresh interval in seconds")
-	rootCmd.Flags().StringVar(&theme, "theme", "github-dark", "Color theme (github-dark, everforest, one-dark-pro, vscode-dark)")
+	rootCmd.Flags().StringVar(&theme, "theme", "github-dark", "Color theme (dracula, github-dark, everforest)")
 }
 
 func Execute() {
@@ -52,7 +52,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if t, ok := tui.Themes[theme]; ok {
 		tui.ApplyTheme(t)
 	} else {
-		return fmt.Errorf("unknown theme %q, available: github-dark, everforest, one-dark-pro, vscode-dark", theme)
+		return fmt.Errorf("unknown theme %q, available: dracula, github-dark, everforest", theme)
 	}
 
 	client, err := k8s.NewClient(kubeconfig, kubeContext)

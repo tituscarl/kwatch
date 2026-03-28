@@ -36,42 +36,29 @@ var Themes = map[string]Theme{
 		Green:   lipgloss.Color("#A7C080"),
 		Yellow:  lipgloss.Color("#DBBC7F"),
 		Red:     lipgloss.Color("#E67E80"),
-		Gray:    lipgloss.Color("#859289"),
+		Gray:    lipgloss.Color("#7A8478"),
 		White:   lipgloss.Color("#D3C6AA"),
-		Subtle:  lipgloss.Color("#374145"),
+		Subtle:  lipgloss.Color("#3D484D"),
 		DimText: lipgloss.Color("#859289"),
-		BgBar:   lipgloss.Color("#272E33"),
+		BgBar:   lipgloss.Color("#232A2E"),
 		BgSel:   lipgloss.Color("#A7C080"),
 	},
-	"one-dark-pro": {
-		Name:    "One Dark Pro",
-		Accent:  lipgloss.Color("#61AFEF"),
-		Green:   lipgloss.Color("#98C379"),
-		Yellow:  lipgloss.Color("#E5C07B"),
-		Red:     lipgloss.Color("#E06C75"),
-		Gray:    lipgloss.Color("#5C6370"),
-		White:   lipgloss.Color("#ABB2BF"),
-		Subtle:  lipgloss.Color("#3E4452"),
-		DimText: lipgloss.Color("#5C6370"),
-		BgBar:   lipgloss.Color("#21252B"),
-		BgSel:   lipgloss.Color("#61AFEF"),
-	},
-	"vscode-dark": {
-		Name:    "VSCode Dark",
-		Accent:  lipgloss.Color("#569CD6"),
-		Green:   lipgloss.Color("#6A9955"),
-		Yellow:  lipgloss.Color("#DCDCAA"),
-		Red:     lipgloss.Color("#F44747"),
-		Gray:    lipgloss.Color("#808080"),
-		White:   lipgloss.Color("#D4D4D4"),
-		Subtle:  lipgloss.Color("#3C3C3C"),
-		DimText: lipgloss.Color("#808080"),
-		BgBar:   lipgloss.Color("#252526"),
-		BgSel:   lipgloss.Color("#569CD6"),
+	"dracula": {
+		Name:    "Dracula",
+		Accent:  lipgloss.Color("#BD93F9"),
+		Green:   lipgloss.Color("#50FA7B"),
+		Yellow:  lipgloss.Color("#F1FA8C"),
+		Red:     lipgloss.Color("#FF5555"),
+		Gray:    lipgloss.Color("#6272A4"),
+		White:   lipgloss.Color("#F8F8F2"),
+		Subtle:  lipgloss.Color("#44475A"),
+		DimText: lipgloss.Color("#6272A4"),
+		BgBar:   lipgloss.Color("#21222C"),
+		BgSel:   lipgloss.Color("#BD93F9"),
 	},
 }
 
-var ThemeNames = []string{"github-dark", "everforest", "one-dark-pro", "vscode-dark"}
+var ThemeNames = []string{"dracula", "github-dark", "everforest"}
 
 func ApplyTheme(t Theme) {
 	colorPurple = t.Accent

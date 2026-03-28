@@ -320,8 +320,15 @@ func (a *App) View() string {
 
 	statusbar := a.statusbar.View()
 
+	separator := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(colorSubtle).
+		Width(a.width).
+		Render("")
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
+		separator,
 		tabs,
 		content,
 		statusbar,
@@ -365,8 +372,8 @@ func (a *App) hasActiveFilter() bool {
 }
 
 func (a *App) contentHeight() int {
-	// total height minus header(2), tab bar(2), status bar(1), some padding
-	h := a.height - 6
+	// total height minus header(6), separator(1), tab bar(2), status bar(1), some padding
+	h := a.height - 11
 	if h < 5 {
 		h = 5
 	}

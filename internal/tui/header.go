@@ -21,7 +21,13 @@ func NewHeaderModel(info k8s.ClusterInfo, namespace string, allNS bool) HeaderMo
 }
 
 func (h HeaderModel) View() string {
-	logo := HeaderStyle.Render(" kwatch ")
+	logoStyle := lipgloss.NewStyle().
+		Foreground(colorPurple).
+		Bold(true)
+
+	logo := logoStyle.Render("╦╔═ ╦ ╦ ╔═╗ ╔╦╗ ╔═╗ ╦ ╦") + "\n" +
+		logoStyle.Render("╠╩╗ ║║║ ╠═╣  ║  ║   ╠═╣") + "\n" +
+		logoStyle.Render("╩ ╚ ╚╩╝ ╩ ╩  ╩  ╚═╝ ╩ ╩")
 
 	cluster := HeaderLabelStyle.Render("cluster:") + " " + HeaderValueStyle.Render(h.clusterInfo.ClusterName)
 	ctx := HeaderLabelStyle.Render("ctx:") + " " + HeaderValueStyle.Render(h.clusterInfo.ContextName)
@@ -34,13 +40,11 @@ func (h HeaderModel) View() string {
 	}
 	ns := HeaderLabelStyle.Render("ns:") + " " + HeaderValueStyle.Render(nsDisplay)
 
-	bgStyle := lipgloss.NewStyle().
+	header := logo + "\n" + cluster + "\n" + ctx + "\n" + ns
+
+	wrapStyle := lipgloss.NewStyle().
 		Width(h.width).
-		Background(lipgloss.Color("#1A1A2E")).
 		Padding(0, 1)
 
-	line1 := logo + "  " + cluster
-	line2 := "          " + ctx + "  " + ns
-
-	return bgStyle.Render(line1 + "\n" + line2)
+	return wrapStyle.Render(header)
 }

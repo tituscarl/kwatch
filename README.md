@@ -112,10 +112,9 @@ kwatch --theme everforest
 
 | Theme | Description |
 |-------|-------------|
+| `dracula` | Dracula — purple accent, vibrant colors |
 | `github-dark` | GitHub Dark — blue accent (default) |
 | `everforest` | Everforest — soft green, easy on the eyes |
-| `one-dark-pro` | One Dark Pro — Atom-inspired muted palette |
-| `vscode-dark` | VSCode Dark — classic VS Code colors |
 
 ## Requirements
 
