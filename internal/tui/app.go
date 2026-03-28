@@ -59,7 +59,7 @@ type App struct {
 	err    error
 }
 
-func NewApp(client *k8s.Client, namespace string, allNS bool, refresh time.Duration) *App {
+func NewApp(client *k8s.Client, namespace string, allNS bool, refresh time.Duration, version string) *App {
 	info := client.ClusterInfo()
 	metricsAvail := client.MetricsAvailable()
 
@@ -68,7 +68,7 @@ func NewApp(client *k8s.Client, namespace string, allNS bool, refresh time.Durat
 		namespace:       namespace,
 		allNamespaces:   allNS,
 		refreshInterval: refresh,
-		header:          NewHeaderModel(info, namespace, allNS),
+		header:          NewHeaderModel(info, namespace, allNS, version),
 		overview:        NewOverviewModel(),
 		pods:            NewPodsModel(allNS, metricsAvail),
 		deployments:     NewDeploymentsModel(allNS),

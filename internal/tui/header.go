@@ -9,14 +9,16 @@ type HeaderModel struct {
 	clusterInfo k8s.ClusterInfo
 	namespace   string
 	allNS       bool
+	version     string
 	width       int
 }
 
-func NewHeaderModel(info k8s.ClusterInfo, namespace string, allNS bool) HeaderModel {
+func NewHeaderModel(info k8s.ClusterInfo, namespace string, allNS bool, version string) HeaderModel {
 	return HeaderModel{
 		clusterInfo: info,
 		namespace:   namespace,
 		allNS:       allNS,
+		version:     version,
 	}
 }
 
@@ -29,6 +31,9 @@ func (h HeaderModel) View() string {
 		logoStyle.Render("╠╩╗ ║║║ ╠═╣  ║  ║   ╠═╣") + "\n" +
 		logoStyle.Render("╩ ╚ ╚╩╝ ╩ ╩  ╩  ╚═╝ ╩ ╩")
 
+	ver := lipgloss.NewStyle().Foreground(colorDimText).Render(" " + h.version)
+	logoWithVer := lipgloss.JoinHorizontal(lipgloss.Bottom, logo, ver)
+
 	cluster := HeaderLabelStyle.Render("cluster:") + " " + HeaderValueStyle.Render(h.clusterInfo.ClusterName)
 	ctx := HeaderLabelStyle.Render("ctx:") + " " + HeaderValueStyle.Render(h.clusterInfo.ContextName)
 
@@ -40,7 +45,7 @@ func (h HeaderModel) View() string {
 	}
 	ns := HeaderLabelStyle.Render("ns:") + " " + HeaderValueStyle.Render(nsDisplay)
 
-	header := logo + "\n" + cluster + "\n" + ctx + "\n" + ns
+	header := logoWithVer + "\n" + cluster + "\n" + ctx + "\n" + ns
 
 	wrapStyle := lipgloss.NewStyle().
 		Width(h.width).

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,6 +12,16 @@ import (
 	"github.com/tituscarl/kwatch/internal/k8s"
 	"github.com/tituscarl/kwatch/internal/tui"
 )
+
+var Version = "dev"
+
+func init() {
+	if Version == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "(devel)" {
+			Version = info.Main.Version
+		}
+	}
+}
 
 var (
 	kubeconfig    string
@@ -70,7 +81,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	refreshInterval := time.Duration(refreshSecs) * time.Second
 
-	app := tui.NewApp(client, ns, allNamespaces, refreshInterval)
+	app := tui.NewApp(client, ns, allNamespaces, refreshInterval, Version)
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := p.Run(); err != nil {
