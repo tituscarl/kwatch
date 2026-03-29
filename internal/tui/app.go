@@ -34,19 +34,19 @@ type App struct {
 	allNamespaces   bool
 	refreshInterval time.Duration
 
-	activeTab   int
-	header      HeaderModel
-	statusbar   StatusBarModel
-	overview    OverviewModel
-	pods        PodsModel
-	deployments DeploymentsModel
-	events      EventsModel
-	detail      DetailModel
-	showDetail  bool
+	activeTab      int
+	header         HeaderModel
+	statusbar      StatusBarModel
+	overview       OverviewModel
+	pods           PodsModel
+	deployments    DeploymentsModel
+	events         EventsModel
+	detail         DetailModel
+	showDetail     bool
 	logs           LogsModel
 	showLogs       bool
 	logsCancelFunc context.CancelFunc // cancel the follow stream
-	logsCh         <-chan string       // channel for follow stream lines
+	logsCh         <-chan string      // channel for follow stream lines
 	podPicker      PodPickerModel
 	showPodPicker  bool
 
@@ -191,6 +191,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			switch {
 			case key.Matches(msg, Keys.Quit):
+				a.stopFollowing()
 				return a, tea.Quit
 			case key.Matches(msg, Keys.Tab1):
 				a.activeTab = tabOverview
