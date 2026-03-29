@@ -69,7 +69,7 @@ func NewApp(client *k8s.Client, namespace string, allNS bool, refresh time.Durat
 		allNamespaces:   allNS,
 		refreshInterval: refresh,
 		header:          NewHeaderModel(info, namespace, allNS, version),
-		overview:        NewOverviewModel(),
+		overview:        NewOverviewModel(metricsAvail),
 		pods:            NewPodsModel(allNS, metricsAvail),
 		deployments:     NewDeploymentsModel(allNS),
 		events:          NewEventsModel(),
@@ -232,6 +232,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MetricsUpdatedMsg:
 		a.pods.UpdateMetrics(msg.Metrics)
 		a.deployments.UpdateResourceStats(a.pods.pods, msg.Metrics)
+		a.overview.UpdateMetrics(msg.Metrics)
 
 	case DeploymentPodsMsg:
 		if msg.Err != nil {

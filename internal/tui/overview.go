@@ -10,15 +10,17 @@ import (
 )
 
 type OverviewModel struct {
-	pods        []k8s.PodInfo
-	deployments []k8s.DeploymentInfo
-	events      []k8s.EventInfo
-	width       int
-	height      int
+	pods         []k8s.PodInfo
+	deployments  []k8s.DeploymentInfo
+	events       []k8s.EventInfo
+	metrics      map[string]k8s.PodMetrics
+	metricsAvail bool
+	width        int
+	height       int
 }
 
-func NewOverviewModel() OverviewModel {
-	return OverviewModel{}
+func NewOverviewModel(metricsAvail bool) OverviewModel {
+	return OverviewModel{metricsAvail: metricsAvail}
 }
 
 func (o *OverviewModel) UpdatePods(pods []k8s.PodInfo) {
@@ -31,6 +33,10 @@ func (o *OverviewModel) UpdateDeployments(deps []k8s.DeploymentInfo) {
 
 func (o *OverviewModel) UpdateEvents(events []k8s.EventInfo) {
 	o.events = events
+}
+
+func (o *OverviewModel) UpdateMetrics(m map[string]k8s.PodMetrics) {
+	o.metrics = m
 }
 
 func (o *OverviewModel) SetSize(w, h int) {
@@ -76,6 +82,15 @@ func (o OverviewModel) View() string {
 		if attention != "" {
 			parts = append(parts, "", attention)
 			remaining -= lipgloss.Height(attention) + 1
+		}
+	}
+
+	// High Memory section — pods/deployments near memory limit
+	if remaining > 6 && o.metricsAvail {
+		highMem := o.renderHighMemory()
+		if highMem != "" {
+			parts = append(parts, "", highMem)
+			remaining -= lipgloss.Height(highMem) + 1
 		}
 	}
 
@@ -366,6 +381,113 @@ func (o OverviewModel) renderAttention() string {
 			line += "  " + detailStyle.Render(iss.detail)
 		}
 		lines = append(lines, line)
+	}
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorSubtle).
+		Padding(1, 3).
+		Width(o.width - 6)
+
+	return boxStyle.Render(strings.Join(lines, "\n"))
+}
+
+// --- High Memory ---
+
+func (o OverviewModel) renderHighMemory() string {
+	if o.metrics == nil || len(o.metrics) == 0 {
+		return ""
+	}
+
+	type highMemEntry struct {
+		kind string // "pod" or "deploy"
+		name string
+		pct  float64
+		mem  string // e.g. "450Mi"
+		lim  string // e.g. "512Mi"
+	}
+
+	var entries []highMemEntry
+
+	// Check individual pods
+	for _, p := range o.pods {
+		key := p.Namespace + "/" + p.Name
+		m, ok := o.metrics[key]
+		if !ok || m.Memory == "" || p.Resources.MemLim == "" {
+			continue
+		}
+		usageBytes := parseMemToBytes(m.Memory)
+		limitBytes := parseMemToBytes(p.Resources.MemLim)
+		if limitBytes == 0 {
+			continue
+		}
+		pct := float64(usageBytes) / float64(limitBytes) * 100
+		if pct >= 90 {
+			entries = append(entries, highMemEntry{"pod", p.Name, pct, m.Memory, p.Resources.MemLim})
+		}
+	}
+
+	// Check deployments (aggregate pods per deployment)
+	for _, dep := range o.deployments {
+		var totalUsageBytes, totalLimitBytes int64
+		prefix := dep.Name + "-"
+		for _, pod := range o.pods {
+			if pod.Namespace != dep.Namespace {
+				continue
+			}
+			if !strings.HasPrefix(pod.Name, prefix) {
+				continue
+			}
+			totalLimitBytes += parseMemToBytes(pod.Resources.MemLim)
+			key := pod.Namespace + "/" + pod.Name
+			if m, ok := o.metrics[key]; ok {
+				totalUsageBytes += parseMemToBytes(m.Memory)
+			}
+		}
+		if totalLimitBytes == 0 {
+			continue
+		}
+		pct := float64(totalUsageBytes) / float64(totalLimitBytes) * 100
+		if pct >= 90 {
+			entries = append(entries, highMemEntry{
+				"deploy", dep.Name, pct,
+				formatBytesShort(totalUsageBytes),
+				formatBytesShort(totalLimitBytes),
+			})
+		}
+	}
+
+	if len(entries) == 0 {
+		return ""
+	}
+
+	// Sort by percentage descending
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].pct > entries[j].pct
+	})
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorYellow)
+	nameStyle := lipgloss.NewStyle().Foreground(colorWhite).Bold(true)
+	pctStyle := lipgloss.NewStyle().Foreground(colorRed).Bold(true)
+	detailStyle := lipgloss.NewStyle().Foreground(colorDimText)
+	tagStyle := lipgloss.NewStyle().Foreground(colorDimText).Bold(true)
+
+	var lines []string
+	lines = append(lines, titleStyle.Render("HIGH MEMORY USAGE"))
+	lines = append(lines, "")
+
+	for i, e := range entries {
+		if i >= 8 {
+			lines = append(lines, detailStyle.Render(fmt.Sprintf("  +%d more...", len(entries)-8)))
+			break
+		}
+		tag := tagStyle.Render("[pod]")
+		if e.kind == "deploy" {
+			tag = tagStyle.Render("[deployment]")
+		}
+		pctStr := pctStyle.Render(fmt.Sprintf("%.0f%%", e.pct))
+		detail := detailStyle.Render(fmt.Sprintf("%s / %s", e.mem, e.lim))
+		lines = append(lines, "  "+pctStyle.Render("▲")+" "+tag+" "+nameStyle.Render(e.name)+"  "+pctStr+"  "+detail)
 	}
 
 	boxStyle := lipgloss.NewStyle().

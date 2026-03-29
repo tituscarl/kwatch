@@ -2,6 +2,8 @@
 bin/
 kwatch
 
+cmd/mock/*
+
 # Go
 *.exe
 *.exe~
