@@ -203,7 +203,7 @@ func (o OverviewModel) renderHealthCard(width int) string {
 	lines = append(lines, "")
 
 	// Count issues by type
-	crashLoop, imagePull, oomKilled, otherFailed := 0, 0, 0, 0
+	crashLoop, imagePull, oomKilled, crashed, otherFailed := 0, 0, 0, 0, 0
 	for _, p := range o.pods {
 		switch p.Status {
 		case "CrashLoopBackOff":
@@ -218,9 +218,12 @@ func (o OverviewModel) renderHealthCard(width int) string {
 		if p.OOMKilled && p.Status != "OOMKilled" {
 			oomKilled++
 		}
+		if p.Crashed && p.Status != "Error" && p.Status != "Failed" {
+			crashed++
+		}
 	}
 
-	issueCount := crashLoop + imagePull + oomKilled + otherFailed
+	issueCount := crashLoop + imagePull + oomKilled + crashed + otherFailed
 	if issueCount == 0 {
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓ All healthy"))
 	} else {
@@ -251,6 +254,9 @@ func (o OverviewModel) renderHealthCard(width int) string {
 	}
 	if oomKilled > 0 {
 		lines = append(lines, StyleFailed.Render(fmt.Sprintf("✗ OOMKilled    %d", oomKilled)))
+	}
+	if crashed > 0 {
+		lines = append(lines, StyleFailed.Render(fmt.Sprintf("⚡ Crashed      %d", crashed)))
 	}
 
 	return CardStyle.Width(width).Render(strings.Join(lines, "\n"))
@@ -299,6 +305,17 @@ func (o OverviewModel) renderAttention() string {
 				detail += ", limit: " + p.Resources.MemLim
 			}
 			issues = append(issues, issue{"⚡", "pod", p.Name, "OOMKilled (recovered)", detail, 1})
+		}
+		// Detect recovered crash (running but had non-zero exit)
+		if p.Crashed && p.Status == "Running" {
+			detail := fmt.Sprintf("recovered, %d restarts", p.Restarts)
+			for _, c := range p.Containers {
+				if c.LastTermCode != 0 && c.LastTermReason != "OOMKilled" {
+					detail = fmt.Sprintf("exit code %d, %d restarts", c.LastTermCode, p.Restarts)
+					break
+				}
+			}
+			issues = append(issues, issue{"⚡", "pod", p.Name, "Crashed (recovered)", detail, 1})
 		}
 	}
 

@@ -15,6 +15,7 @@ type PodInfo struct {
 	Resources  PodResources
 	Containers []ContainerInfo
 	OOMKilled  bool // true if any container was OOMKilled (current or last state)
+	Crashed    bool // true if any container terminated with non-zero exit (not OOMKilled)
 }
 
 type ContainerInfo struct {
@@ -38,6 +39,15 @@ type OOMEvent struct {
 	ContainerName string
 	Restarts      int32
 	MemLim        string // Memory limit when OOMKilled
+	Ago           string // How long ago
+}
+
+type CrashEvent struct {
+	PodName       string
+	Namespace     string
+	ContainerName string
+	Restarts      int32
+	ExitCode      int32
 	Ago           string // How long ago
 }
 

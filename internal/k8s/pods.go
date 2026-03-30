@@ -111,6 +111,18 @@ func podToInfo(pod corev1.Pod) PodInfo {
 		}
 	}
 
+	// Detect crashed containers (non-zero exit code, not OOMKilled)
+	crashed := false
+	for _, ci := range containers {
+		if ci.State == "OOMKilled" || ci.LastTermReason == "OOMKilled" {
+			continue
+		}
+		if ci.LastTermCode != 0 && ci.LastTermReason != "" {
+			crashed = true
+			break
+		}
+	}
+
 	return PodInfo{
 		Name:       pod.Name,
 		Namespace:  pod.Namespace,
@@ -122,6 +134,7 @@ func podToInfo(pod corev1.Pod) PodInfo {
 		Resources:  resources,
 		Containers: containers,
 		OOMKilled:  oomKilled,
+		Crashed:    crashed,
 	}
 }
 
@@ -198,6 +211,29 @@ func formatDuration(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%ds ago", int(d.Seconds()))
 	}
+}
+
+// GetCrashEvents returns all pods with crashed containers (non-zero exit, not OOMKilled)
+func GetCrashEvents(pods []PodInfo) []CrashEvent {
+	var events []CrashEvent
+	for _, pod := range pods {
+		for _, c := range pod.Containers {
+			if c.State == "OOMKilled" || c.LastTermReason == "OOMKilled" {
+				continue
+			}
+			if c.LastTermCode != 0 && c.LastTermReason != "" {
+				events = append(events, CrashEvent{
+					PodName:       pod.Name,
+					Namespace:     pod.Namespace,
+					ContainerName: c.Name,
+					Restarts:      c.Restarts,
+					ExitCode:      c.LastTermCode,
+					Ago:           c.LastTermAt,
+				})
+			}
+		}
+	}
+	return events
 }
 
 // GetOOMEvents returns all pods with OOMKilled containers

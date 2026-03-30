@@ -93,6 +93,13 @@ func (d *DetailModel) ShowPod(pod k8s.PodInfo) {
 					oomMsg += StyleWarning.Render(fmt.Sprintf(" — limit was %s, consider increasing", c.MemLim))
 				}
 				b.WriteString(oomMsg + "\n")
+			} else if c.LastTermCode != 0 && c.LastTermReason != "" {
+				crashMsg := StyleFailed.Render(fmt.Sprintf("    *** Crashed (exit code %d)", c.LastTermCode))
+				if c.LastTermAt != "" {
+					crashMsg += StyleFailed.Render(fmt.Sprintf(" (%s)", c.LastTermAt))
+				}
+				crashMsg += StyleWarning.Render(" — check logs for panic/error details")
+				b.WriteString(crashMsg + "\n")
 			}
 		}
 	}

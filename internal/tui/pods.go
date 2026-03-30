@@ -216,9 +216,13 @@ func (p PodsModel) renderRow(pod k8s.PodInfo, selected bool) string {
 		val := values[i]
 
 		if selected {
-			// Show OOM warning even in selected row
-			if col.name == "STATUS" && pod.OOMKilled && pod.Status != "OOMKilled" {
-				val = val + " OOM!"
+			// Show OOM/crash warning even in selected row
+			if col.name == "STATUS" {
+				if pod.OOMKilled && pod.Status != "OOMKilled" {
+					val = val + " OOM!"
+				} else if pod.Crashed && pod.Status != "Error" && pod.Status != "Failed" {
+					val = val + " CRASH!"
+				}
 			}
 			parts = append(parts, selectedStyle.Width(col.width).Padding(0, 1).Render(val))
 		} else {
@@ -227,6 +231,9 @@ func (p PodsModel) renderRow(pod k8s.PodInfo, selected bool) string {
 				if pod.OOMKilled && pod.Status != "OOMKilled" {
 					// Pod recovered but was OOMKilled before
 					val = val + StyleFailed.Render(" OOM!")
+				} else if pod.Crashed && pod.Status != "Error" && pod.Status != "Failed" {
+					// Pod recovered but had a crash before
+					val = val + StyleWarning.Render(" CRASH!")
 				}
 				style = style.Inherit(StatusStyle(pod.Status))
 			} else if col.name == "MEM%" {
