@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/tituscarl/kwatch/internal/k8s"
 )
 
@@ -105,26 +105,26 @@ func (d DeploymentsModel) SelectedDeployment() (k8s.DeploymentInfo, bool) {
 
 func (d *DeploymentsModel) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if d.filtering {
 			switch {
 			case key.Matches(msg, Keys.Escape):
 				d.filtering = false
 				d.filter = ""
 				return nil
-			case msg.Type == tea.KeyBackspace:
+			case msg.Code == tea.KeyBackspace:
 				if len(d.filter) > 0 {
 					d.filter = d.filter[:len(d.filter)-1]
 				}
 				return nil
-			case msg.Type == tea.KeyEnter:
+			case msg.Code == tea.KeyEnter:
 				d.filtering = false
 				return nil
-			case msg.Type == tea.KeyUp, msg.Type == tea.KeyDown,
-				msg.Type == tea.KeyPgUp, msg.Type == tea.KeyPgDown:
+			case msg.Code == tea.KeyUp, msg.Code == tea.KeyDown,
+				msg.Code == tea.KeyPgUp, msg.Code == tea.KeyPgDown:
 				// Allow arrow keys to navigate while filtering
-			case msg.Type == tea.KeyRunes:
-				d.filter += string(msg.Runes)
+			case msg.Text != "":
+				d.filter += msg.Text
 				d.cursor = 0
 				d.offset = 0
 				return nil
@@ -136,7 +136,7 @@ func (d *DeploymentsModel) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (d *DeploymentsModel) handleNav(msg tea.KeyMsg) {
+func (d *DeploymentsModel) handleNav(msg tea.KeyPressMsg) {
 	filtered := d.filteredDeployments()
 
 	switch msg.String() {

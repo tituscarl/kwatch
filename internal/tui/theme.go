@@ -1,19 +1,23 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"image/color"
+
+	"charm.land/lipgloss/v2"
+)
 
 type Theme struct {
 	Name    string
-	Accent  lipgloss.Color // Primary accent (tabs, headers, cards)
-	Green   lipgloss.Color // Running / healthy
-	Yellow  lipgloss.Color // Pending / warning
-	Red     lipgloss.Color // Failed / error
-	Gray    lipgloss.Color // Succeeded / completed
-	White   lipgloss.Color // Primary text
-	Subtle  lipgloss.Color // Borders, separators
-	DimText lipgloss.Color // Secondary text
-	BgBar   lipgloss.Color // Header/status bar background
-	BgSel   lipgloss.Color // Selected row background
+	Accent  color.Color // Primary accent (tabs, headers, cards)
+	Green   color.Color // Running / healthy
+	Yellow  color.Color // Pending / warning
+	Red     color.Color // Failed / error
+	Gray    color.Color // Succeeded / completed
+	White   color.Color // Primary text
+	Subtle  color.Color // Borders, separators
+	DimText color.Color // Secondary text
+	BgBar   color.Color // Header/status bar background
+	BgSel   color.Color // Selected row background
 }
 
 var Themes = map[string]Theme{

@@ -5,8 +5,10 @@ import (
 	"regexp"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 const maxLogLines = 5000
@@ -206,18 +208,18 @@ func (l LogsModel) displayLineCount() int {
 	return len(l.lines)
 }
 
-func (l LogsModel) Update(msg tea.KeyMsg) LogsModel {
+func (l LogsModel) Update(msg tea.KeyPressMsg) LogsModel {
 	// Handle filter input mode
 	if l.filtering {
 		switch {
-		case msg.Type == tea.KeyEscape:
+		case msg.Code == tea.KeyEscape:
 			l.filtering = false
 			l.filterInput = ""
-		case msg.Type == tea.KeyBackspace:
+		case msg.Code == tea.KeyBackspace:
 			if len(l.filterInput) > 0 {
 				l.filterInput = l.filterInput[:len(l.filterInput)-1]
 			}
-		case msg.Type == tea.KeyEnter:
+		case msg.Code == tea.KeyEnter:
 			l.filtering = false
 			if l.filterInput != "" {
 				l.filterTerm = l.filterInput
@@ -229,10 +231,10 @@ func (l LogsModel) Update(msg tea.KeyMsg) LogsModel {
 				}
 			}
 			l.filterInput = ""
-		case msg.Type == tea.KeyTab:
+		case msg.Code == tea.KeyTab:
 			l.filterCaseSense = !l.filterCaseSense
-		case msg.Type == tea.KeyRunes:
-			l.filterInput += string(msg.Runes)
+		case msg.Text != "":
+			l.filterInput += msg.Text
 		}
 		return l
 	}
@@ -598,21 +600,21 @@ func highlightMatches(line string, re *regexp.Regexp, baseStyle lipgloss.Style) 
 }
 
 // podColorPalette — distinct colors that work well on dark backgrounds.
-var podColorPalette = []lipgloss.Color{
-	"#61AFEF", // blue
-	"#E5C07B", // yellow
-	"#C678DD", // purple
-	"#56B6C2", // cyan
-	"#E06C75", // red
-	"#98C379", // green
-	"#D19A66", // orange
-	"#FF6AC1", // pink
-	"#7EC8E3", // light blue
-	"#C3E88D", // lime
+var podColorPalette = []color.Color{
+	lipgloss.Color("#61AFEF"), // blue
+	lipgloss.Color("#E5C07B"), // yellow
+	lipgloss.Color("#C678DD"), // purple
+	lipgloss.Color("#56B6C2"), // cyan
+	lipgloss.Color("#E06C75"), // red
+	lipgloss.Color("#98C379"), // green
+	lipgloss.Color("#D19A66"), // orange
+	lipgloss.Color("#FF6AC1"), // pink
+	lipgloss.Color("#7EC8E3"), // light blue
+	lipgloss.Color("#C3E88D"), // lime
 }
 
 // podTagColor returns a deterministic color for a pod tag based on hash.
-func podTagColor(tag string) lipgloss.Color {
+func podTagColor(tag string) color.Color {
 	var h uint32
 	for _, c := range tag {
 		h = h*31 + uint32(c)

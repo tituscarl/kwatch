@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/tituscarl/kwatch/internal/k8s"
 )
 
@@ -76,7 +76,7 @@ func (p PodPickerModel) SelectedPod() (k8s.PodInfo, bool) {
 	return k8s.PodInfo{}, false
 }
 
-func (p *PodPickerModel) Update(msg tea.KeyMsg) {
+func (p *PodPickerModel) Update(msg tea.KeyPressMsg) {
 	total := len(p.pods) + 1 // +1 for "All Pods" at cursor 0
 	switch msg.String() {
 	case "up", "k":

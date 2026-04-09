@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/tituscarl/kwatch/internal/k8s"
 )
 
@@ -59,26 +59,26 @@ func (p PodsModel) SelectedPod() (k8s.PodInfo, bool) {
 
 func (p *PodsModel) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if p.filtering {
 			switch {
 			case key.Matches(msg, Keys.Escape):
 				p.filtering = false
 				p.filter = ""
 				return nil
-			case msg.Type == tea.KeyBackspace:
+			case msg.Code == tea.KeyBackspace:
 				if len(p.filter) > 0 {
 					p.filter = p.filter[:len(p.filter)-1]
 				}
 				return nil
-			case msg.Type == tea.KeyEnter:
+			case msg.Code == tea.KeyEnter:
 				p.filtering = false
 				return nil
-			case msg.Type == tea.KeyUp, msg.Type == tea.KeyDown,
-				msg.Type == tea.KeyPgUp, msg.Type == tea.KeyPgDown:
+			case msg.Code == tea.KeyUp, msg.Code == tea.KeyDown,
+				msg.Code == tea.KeyPgUp, msg.Code == tea.KeyPgDown:
 				// Allow arrow keys to navigate while filtering
-			case msg.Type == tea.KeyRunes:
-				p.filter += string(msg.Runes)
+			case msg.Text != "":
+				p.filter += msg.Text
 				p.cursor = 0
 				p.offset = 0
 				return nil
@@ -90,7 +90,7 @@ func (p *PodsModel) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (p *PodsModel) handleNav(msg tea.KeyMsg) {
+func (p *PodsModel) handleNav(msg tea.KeyPressMsg) {
 	filtered := p.filteredPods()
 
 	switch msg.String() {

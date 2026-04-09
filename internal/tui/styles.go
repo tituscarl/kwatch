@@ -1,17 +1,21 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"image/color"
+
+	"charm.land/lipgloss/v2"
+)
 
 var (
 	// Colors
-	colorPurple  = lipgloss.Color("#7D56F4")
-	colorGreen   = lipgloss.Color("#00CC66")
-	colorYellow  = lipgloss.Color("#FFAA00")
-	colorRed     = lipgloss.Color("#FF4444")
-	colorGray    = lipgloss.Color("#666666")
-	colorWhite   = lipgloss.Color("#FAFAFA")
-	colorSubtle  = lipgloss.Color("#383838")
-	colorDimText = lipgloss.Color("#888888")
+	colorPurple  color.Color = lipgloss.Color("#7D56F4")
+	colorGreen   color.Color = lipgloss.Color("#00CC66")
+	colorYellow  color.Color = lipgloss.Color("#FFAA00")
+	colorRed     color.Color = lipgloss.Color("#FF4444")
+	colorGray    color.Color = lipgloss.Color("#666666")
+	colorWhite   color.Color = lipgloss.Color("#FAFAFA")
+	colorSubtle  color.Color = lipgloss.Color("#383838")
+	colorDimText color.Color = lipgloss.Color("#888888")
 
 	// Status styles
 	StyleRunning   = lipgloss.NewStyle().Foreground(colorGreen)

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/tituscarl/kwatch/internal/k8s"
 )
 
@@ -149,7 +149,7 @@ func (d *DetailModel) ShowDeployment(dep k8s.DeploymentInfo) {
 
 func (d DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		visibleLines := d.height - 6
 		switch {
 		case key.Matches(msg, Keys.Up):

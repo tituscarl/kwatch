@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/tituscarl/kwatch/internal/k8s"
 )
 
@@ -18,7 +18,6 @@ type MetricsUpdatedMsg struct{ Metrics map[string]k8s.PodMetrics }
 type TickMsg time.Time
 type ErrorMsg struct{ Err error }
 type LogsRefreshMsg struct{}
-
 const (
 	tabOverview = iota
 	tabPods
@@ -107,7 +106,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.logs.SetSize(msg.Width, contentHeight)
 		a.podPicker.SetSize(msg.Width, contentHeight)
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// If pod picker is open
 		if a.showPodPicker {
 			if key.Matches(msg, Keys.Escape) {
@@ -285,9 +284,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, tea.Batch(cmds...)
 }
 
-func (a *App) View() string {
+func (a *App) View() tea.View {
 	if a.width == 0 {
-		return "Loading..."
+		v := tea.NewView("Loading...")
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
 	}
 
 	header := a.header.View()
@@ -328,13 +330,18 @@ func (a *App) View() string {
 		Width(a.width).
 		Render("")
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	result := lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		separator,
 		tabs,
 		content,
 		statusbar,
 	)
+
+	v := tea.NewView(result)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
 }
 
 func (a *App) renderTabs() string {

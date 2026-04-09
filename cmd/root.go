@@ -7,7 +7,7 @@ import (
 	"runtime/debug"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 	"github.com/tituscarl/kwatch/internal/k8s"
 	"github.com/tituscarl/kwatch/internal/tui"
@@ -82,7 +82,7 @@ func run(cmd *cobra.Command, args []string) error {
 	refreshInterval := time.Duration(refreshSecs) * time.Second
 
 	app := tui.NewApp(client, ns, allNamespaces, refreshInterval, Version)
-	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(app)
 
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("error running kwatch: %w", err)
