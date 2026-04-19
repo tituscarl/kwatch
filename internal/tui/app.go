@@ -45,6 +45,8 @@ type App struct {
 	showDetail     bool
 	logs           LogsModel
 	showLogs       bool
+	lineDetail     LineDetailModel
+	showLineDetail bool
 	logsCancelFunc context.CancelFunc // cancel the follow stream
 	logsCh         <-chan string      // channel for follow stream lines
 	podPicker      PodPickerModel
@@ -75,6 +77,7 @@ func NewApp(client *k8s.Client, namespace string, allNS bool, refresh time.Durat
 		events:          NewEventsModel(),
 		detail:          NewDetailModel(),
 		logs:            NewLogsModel(),
+		lineDetail:      NewLineDetailModel(),
 		podPicker:       NewPodPickerModel(),
 	}
 }
@@ -105,6 +108,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.overview.SetSize(msg.Width, contentHeight)
 		a.detail.SetSize(msg.Width, contentHeight)
 		a.logs.SetSize(msg.Width, contentHeight)
+		a.lineDetail.SetSize(msg.Width, contentHeight)
 		a.podPicker.SetSize(msg.Width, contentHeight)
 
 	case tea.KeyPressMsg:
@@ -145,6 +149,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// Line-detail overlay sits above the logs view
+		if a.showLineDetail {
+			if key.Matches(msg, Keys.Escape) {
+				a.showLineDetail = false
+				return a, nil
+			}
+			a.lineDetail, _ = a.lineDetail.Update(msg)
+			return a, nil
+		}
+
 		// If logs view is open, handle keys
 		if a.showLogs {
 			if key.Matches(msg, Keys.Escape) {
@@ -158,6 +172,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.multiPodLog = false
 				a.multiPodPods = nil
 				a.statusbar.hidden = false
+				return a, nil
+			}
+			// Enter opens the full-line detail overlay (but not while typing a grep query)
+			if key.Matches(msg, Keys.Enter) && !a.logs.filtering {
+				if text, lineNum, podTag, ok := a.logs.SelectedLine(); ok {
+					a.lineDetail.Show(text, lineNum, podTag)
+					a.showLineDetail = true
+				}
 				return a, nil
 			}
 			prevFollowing := a.logs.following
@@ -299,6 +321,8 @@ func (a *App) View() tea.View {
 	var content string
 	if a.showPodPicker {
 		content = a.podPicker.View()
+	} else if a.showLineDetail {
+		content = a.lineDetail.View()
 	} else if a.showLogs {
 		content = a.logs.View()
 	} else if a.showDetail {

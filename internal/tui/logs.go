@@ -25,6 +25,7 @@ type LogsModel struct {
 	err       error
 	following bool
 	atBottom  bool // track if user is at the bottom
+	cursor    int  // selected line index (into l.lines in normal mode; mirrors matchCursor in filter mode)
 
 	// Multi-pod
 	multiPod bool
@@ -71,6 +72,7 @@ func (l *LogsModel) Show(podName, namespace, container string) {
 	l.err = nil
 	l.following = false
 	l.atBottom = true
+	l.cursor = 0
 	l.filtering = false
 	l.filterInput = ""
 	l.filterTerm = ""
@@ -92,6 +94,7 @@ func (l *LogsModel) ShowMultiPod(deploymentName, namespace string, podCount int)
 	l.err = nil
 	l.following = false
 	l.atBottom = true
+	l.cursor = 0
 	l.filtering = false
 	l.filterInput = ""
 	l.filterTerm = ""
@@ -99,6 +102,30 @@ func (l *LogsModel) ShowMultiPod(deploymentName, namespace string, podCount int)
 	l.filterCaseSense = false
 	l.matchLines = nil
 	l.matchCursor = 0
+}
+
+// SelectedLine returns the currently highlighted log line, its 1-based line
+// number within the full buffer, and the pod tag (empty if single-pod).
+func (l LogsModel) SelectedLine() (text string, lineNum int, podTag string, ok bool) {
+	var idx int
+	if l.filterTerm != "" {
+		if len(l.matchLines) == 0 || l.matchCursor < 0 || l.matchCursor >= len(l.matchLines) {
+			return "", 0, "", false
+		}
+		idx = l.matchLines[l.matchCursor]
+	} else {
+		if len(l.lines) == 0 || l.cursor < 0 || l.cursor >= len(l.lines) {
+			return "", 0, "", false
+		}
+		idx = l.cursor
+	}
+	line := l.lines[idx]
+	if l.multiPod && len(line) > 2 && line[0] == '[' {
+		if end := strings.Index(line, "] "); end != -1 {
+			return line[end+2:], idx + 1, line[1:end], true
+		}
+	}
+	return line, idx + 1, "", true
 }
 
 // HasActiveFilter returns true if the log viewer has a search filter active or being typed.
@@ -165,14 +192,19 @@ func (l *LogsModel) UpdateLogs(content string, err error) {
 	// Auto-scroll to bottom
 	if l.atBottom {
 		l.offset = l.maxOffset()
+		l.cursor = max(l.displayLineCount()-1, 0)
+	} else if l.cursor >= l.displayLineCount() {
+		l.cursor = max(l.displayLineCount()-1, 0)
 	}
 }
 
 func (l *LogsModel) AppendLines(lines []string) {
+	trimmed := 0
 	l.lines = append(l.lines, lines...)
 	// Cap total lines to prevent unbounded memory growth
 	if len(l.lines) > maxLogLines {
-		l.lines = l.lines[len(l.lines)-maxLogLines:]
+		trimmed = len(l.lines) - maxLogLines
+		l.lines = l.lines[trimmed:]
 		l.refilter() // indices shift after trimming
 	} else if l.filterRegex != nil {
 		// Check new lines against filter
@@ -183,9 +215,16 @@ func (l *LogsModel) AppendLines(lines []string) {
 			}
 		}
 	}
+	// Adjust cursor after trim (normal mode only — filter mode uses matchCursor)
+	if l.filterTerm == "" && trimmed > 0 {
+		l.cursor = max(l.cursor-trimmed, 0)
+	}
 	// Auto-scroll if at bottom
 	if l.atBottom {
 		l.offset = l.maxOffset()
+		l.cursor = max(l.displayLineCount()-1, 0)
+	} else if l.cursor >= l.displayLineCount() {
+		l.cursor = max(l.displayLineCount()-1, 0)
 	}
 }
 
@@ -199,6 +238,7 @@ func (l *LogsModel) SetFollowing(f bool) {
 	if f {
 		l.atBottom = true
 		l.offset = l.maxOffset()
+		l.cursor = max(l.displayLineCount()-1, 0)
 	}
 }
 
@@ -277,36 +317,77 @@ func (l LogsModel) Update(msg tea.KeyPressMsg) LogsModel {
 			return l
 		}
 	case "up", "k":
-		if l.offset > 0 {
-			l.offset--
+		if l.filterTerm != "" {
+			if l.matchCursor > 0 {
+				l.matchCursor--
+				if l.matchCursor < l.offset {
+					l.offset = l.matchCursor
+				}
+				l.atBottom = false
+			}
+		} else if l.cursor > 0 {
+			l.cursor--
+			if l.cursor < l.offset {
+				l.offset = l.cursor
+			}
 			l.atBottom = false
 		}
 	case "down", "j":
-		if l.offset < l.maxOffset() {
-			l.offset++
-		}
-		if l.offset >= l.maxOffset() {
-			l.atBottom = true
+		if l.filterTerm != "" {
+			if l.matchCursor < len(l.matchLines)-1 {
+				l.matchCursor++
+				if l.matchCursor >= l.offset+visibleLines {
+					l.offset = l.matchCursor - visibleLines + 1
+				}
+				l.atBottom = l.offset >= l.maxOffset()
+			}
+		} else if l.cursor < len(l.lines)-1 {
+			l.cursor++
+			if l.cursor >= l.offset+visibleLines {
+				l.offset = l.cursor - visibleLines + 1
+			}
+			l.atBottom = l.offset >= l.maxOffset()
 		}
 	case "pgup":
 		l.offset = max(l.offset-visibleLines, 0)
+		if l.filterTerm != "" {
+			l.matchCursor = max(l.matchCursor-visibleLines, 0)
+		} else {
+			l.cursor = max(l.cursor-visibleLines, 0)
+		}
 		l.atBottom = false
 	case "pgdown":
 		l.offset = min(l.offset+visibleLines, l.maxOffset())
+		if l.filterTerm != "" {
+			l.matchCursor = min(l.matchCursor+visibleLines, max(len(l.matchLines)-1, 0))
+		} else {
+			l.cursor = min(l.cursor+visibleLines, max(len(l.lines)-1, 0))
+		}
 		if l.offset >= l.maxOffset() {
 			l.atBottom = true
 		}
 	case "G":
 		l.offset = l.maxOffset()
+		if l.filterTerm != "" {
+			l.matchCursor = max(len(l.matchLines)-1, 0)
+		} else {
+			l.cursor = max(len(l.lines)-1, 0)
+		}
 		l.atBottom = true
 	case "g":
 		l.offset = 0
+		if l.filterTerm != "" {
+			l.matchCursor = 0
+		} else {
+			l.cursor = 0
+		}
 		l.atBottom = false
 	case "f":
 		l.following = !l.following
 		if l.following {
 			l.atBottom = true
 			l.offset = l.maxOffset()
+			l.cursor = max(l.displayLineCount()-1, 0)
 		}
 	}
 	return l
@@ -348,6 +429,7 @@ func (l LogsModel) View() string {
 	keyStyle := lipgloss.NewStyle().Foreground(colorPurple).Bold(true)
 	descStyle := lipgloss.NewStyle().Foreground(colorDimText)
 	helpBar := keyStyle.Render("esc") + descStyle.Render(" close") + sep +
+		keyStyle.Render("enter") + descStyle.Render(" view line") + sep +
 		keyStyle.Render("f") + descStyle.Render(" follow") + sep +
 		keyStyle.Render("j/k") + descStyle.Render(" scroll") + sep +
 		keyStyle.Render("G") + descStyle.Render(" bottom") + sep +
@@ -508,7 +590,13 @@ func (l LogsModel) View() string {
 					styled = logLineStyle.Render(line)
 				}
 			}
-			b.WriteString(ansi.Truncate(lineNum+" "+styled, innerWidth, "") + "\n")
+			var row string
+			if i == l.cursor {
+				row = lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render("▸") + lineNum + " " + styled
+			} else {
+				row = " " + lineNum + " " + styled
+			}
+			b.WriteString(ansi.Truncate(row, innerWidth, "") + "\n")
 		}
 
 		scrollInfo = lipgloss.NewStyle().Foreground(colorDimText).Render(
