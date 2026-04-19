@@ -18,6 +18,7 @@ type MetricsUpdatedMsg struct{ Metrics map[string]k8s.PodMetrics }
 type TickMsg time.Time
 type ErrorMsg struct{ Err error }
 type LogsRefreshMsg struct{}
+
 const (
 	tabOverview = iota
 	tabPods

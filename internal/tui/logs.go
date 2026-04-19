@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const maxLogLines = 5000
@@ -413,6 +414,13 @@ func (l LogsModel) View() string {
 	lineNumStyle := lipgloss.NewStyle().Foreground(colorDimText).Width(lineNumWidth + 1)
 	logLineStyle := lipgloss.NewStyle().Foreground(colorWhite)
 
+	// Truncation width: outer box width minus border (2) and padding (4).
+	// Long lines would otherwise wrap and push the bottom bar off-screen.
+	innerWidth := l.width - 12
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+
 	var scrollInfo string
 
 	if l.filterTerm != "" {
@@ -455,11 +463,13 @@ func (l LogsModel) View() string {
 				}
 
 				// Mark current match with indicator
+				var row string
 				if i == l.matchCursor {
-					b.WriteString(lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render("▸") + lineNum + " " + styled + "\n")
+					row = lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render("▸") + lineNum + " " + styled
 				} else {
-					b.WriteString(" " + lineNum + " " + styled + "\n")
+					row = " " + lineNum + " " + styled
 				}
+				b.WriteString(ansi.Truncate(row, innerWidth, "") + "\n")
 			}
 
 			scrollInfo = lipgloss.NewStyle().Foreground(colorDimText).Render(
@@ -498,7 +508,7 @@ func (l LogsModel) View() string {
 					styled = logLineStyle.Render(line)
 				}
 			}
-			b.WriteString(lineNum + " " + styled + "\n")
+			b.WriteString(ansi.Truncate(lineNum+" "+styled, innerWidth, "") + "\n")
 		}
 
 		scrollInfo = lipgloss.NewStyle().Foreground(colorDimText).Render(
@@ -508,7 +518,7 @@ func (l LogsModel) View() string {
 	content := DetailBorderStyle.
 		Width(l.width - 6).
 		Height(visibleLines).
-		Render(b.String())
+		Render(strings.TrimRight(b.String(), "\n"))
 
 	parts := []string{"", title}
 	parts = append(parts, content)
@@ -521,7 +531,7 @@ func (l LogsModel) View() string {
 }
 
 func (l LogsModel) visibleLines() int {
-	h := l.height - 7
+	h := l.height - 8 // 1 spacer + 1 title + 4 border+padding + 1 scrollInfo + 1 bottomBar
 	return max(h, 1)
 }
 
