@@ -49,6 +49,7 @@ type App struct {
 	showLineDetail bool
 	logsCancelFunc context.CancelFunc // cancel the follow stream
 	logsCh         <-chan string      // channel for follow stream lines
+	logsEpoch      int                // bumped on each follow start to discard stale stream messages
 	podPicker      PodPickerModel
 	showPodPicker  bool
 
@@ -110,6 +111,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.logs.SetSize(msg.Width, contentHeight)
 		a.lineDetail.SetSize(msg.Width, contentHeight)
 		a.podPicker.SetSize(msg.Width, contentHeight)
+
+	case tea.MouseWheelMsg:
+		var k tea.KeyPressMsg
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			k = tea.KeyPressMsg{Code: tea.KeyUp}
+		case tea.MouseWheelDown:
+			k = tea.KeyPressMsg{Code: tea.KeyDown}
+		default:
+			return a, nil
+		}
+		// One wheel notch scrolls a few lines on whichever view has focus.
+		const wheelLines = 3
+		for i := 0; i < wheelLines; i++ {
+			if cmd := a.scrollFocused(k); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 
 	case tea.KeyPressMsg:
 		// If pod picker is open
@@ -267,14 +286,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.logs.UpdateLogs(msg.Content, msg.Err)
 
 	case LogLineMsg:
-		if a.showLogs && a.logs.following {
+		if msg.epoch == a.logsEpoch && a.showLogs && a.logs.following {
 			a.logs.AppendLines(msg.Lines)
-			// Continue reading the next batch from the stream
-			cmds = append(cmds, a.readNextLogLine())
+			// Continue reading the next batch from the same stream
+			cmds = append(cmds, a.readLogLines(a.logsCh, msg.epoch))
 		}
 
 	case LogStreamEndedMsg:
-		if a.showLogs && a.logs.following {
+		if msg.epoch == a.logsEpoch && a.showLogs && a.logs.following {
 			a.logs.SetFollowing(false)
 			if msg.Err != nil {
 				a.logs.err = msg.Err
@@ -472,35 +491,37 @@ func (a *App) fetchDeploymentPods(namespace, name string) tea.Cmd {
 func (a *App) startFollowing() tea.Cmd {
 	a.stopFollowing() // cancel any existing stream
 
+	a.logsEpoch++
+	epoch := a.logsEpoch
+
 	ctx, cancel := context.WithCancel(context.Background())
 	a.logsCancelFunc = cancel
 
 	client := a.client
 	namespace := a.logs.namespace
 
+	var ch chan string
 	if a.multiPodLog {
-		ch := make(chan string, 100*len(a.multiPodPods))
-		a.logsCh = ch
+		ch = make(chan string, 100*len(a.multiPodPods))
 		pods := a.multiPodPods
 		go func() {
 			_ = client.FollowMultiPodLogs(ctx, namespace, pods, 50, ch)
 		}()
 	} else {
-		ch := make(chan string, 100)
-		a.logsCh = ch
+		ch = make(chan string, 100)
 		podName := a.logs.podName
 		container := a.logs.container
 		go func() {
 			_ = client.FollowPodLogs(ctx, namespace, podName, container, 50, ch)
 		}()
 	}
+	a.logsCh = ch
 
 	// Return a cmd that reads one line at a time
-	return a.readNextLogLine()
+	return a.readLogLines(ch, epoch)
 }
 
-func (a *App) readNextLogLine() tea.Cmd {
-	ch := a.logsCh
+func (a *App) readLogLines(ch <-chan string, epoch int) tea.Cmd {
 	if ch == nil {
 		return nil
 	}
@@ -508,7 +529,7 @@ func (a *App) readNextLogLine() tea.Cmd {
 		// Block on first line
 		line, ok := <-ch
 		if !ok {
-			return LogStreamEndedMsg{}
+			return LogStreamEndedMsg{epoch: epoch}
 		}
 		// Drain all immediately available lines (non-blocking) into a batch
 		batch := []string{line}
@@ -517,16 +538,16 @@ func (a *App) readNextLogLine() tea.Cmd {
 			case l, ok := <-ch:
 				if !ok {
 					// Channel closed, return what we have
-					return LogLineMsg{Lines: batch}
+					return LogLineMsg{epoch: epoch, Lines: batch}
 				}
 				batch = append(batch, l)
 				if len(batch) >= 500 {
 					// Cap batch size to keep UI responsive
-					return LogLineMsg{Lines: batch}
+					return LogLineMsg{epoch: epoch, Lines: batch}
 				}
 			default:
 				// No more lines available right now
-				return LogLineMsg{Lines: batch}
+				return LogLineMsg{epoch: epoch, Lines: batch}
 			}
 		}
 	}
@@ -556,6 +577,27 @@ func (a *App) fetchLogs() tea.Cmd {
 		content, err := a.client.GetPodLogs(namespace, podName, container, 200)
 		return LogsUpdatedMsg{Content: content, Err: err}
 	}
+}
+
+// scrollFocused routes a synthetic up/down key to the view that currently has
+// focus, following the same overlay precedence as View.
+func (a *App) scrollFocused(k tea.KeyPressMsg) tea.Cmd {
+	switch {
+	case a.showPodPicker:
+		a.podPicker.Update(k)
+	case a.showLineDetail:
+		a.lineDetail, _ = a.lineDetail.Update(k)
+	case a.showLogs:
+		// Don't scroll the buffer out from under someone typing a grep query.
+		if !a.logs.filtering {
+			a.logs = a.logs.Update(k)
+		}
+	case a.showDetail:
+		a.detail, _ = a.detail.Update(k)
+	default:
+		return a.updateActiveTab(k)
+	}
+	return nil
 }
 
 func (a *App) updateActiveTab(msg tea.Msg) tea.Cmd {

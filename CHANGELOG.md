@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.26
+
+### Added
+
+- **Mouse wheel scrolling.** The wheel now scrolls whichever view has focus —
+  logs, detail, pod picker, or the pods/deployments/events tables.
+
+### Fixed
+
+- **More kubeconfigs load.** Registered the oidc, gcp, and azure auth providers,
+  so kubeconfigs relying on them no longer fail with "no Auth Provider found".
+  Exec-based plugins (gke-gcloud-auth-plugin, aws eks get-token, kubelogin)
+  continue to work as before.
+- **Follow mode no longer flips to snapshot after a quick toggle.** Log stream
+  messages are tagged with a stream epoch, so leftover events from a cancelled
+  stream are ignored instead of stopping the current one.
+
 ## v0.1.25
 
 ### Fixed

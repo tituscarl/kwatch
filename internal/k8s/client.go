@@ -7,6 +7,11 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	// Register the oidc/gcp/azure auth providers so kubeconfigs that rely on
+	// them load instead of failing with "no Auth Provider found". Exec-based
+	// plugins (gke-gcloud-auth-plugin, aws eks get-token, kubelogin) work
+	// without this.
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/tools/clientcmd"
 	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
 )

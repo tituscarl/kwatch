@@ -48,12 +48,17 @@ type LogsUpdatedMsg struct {
 	Err     error
 }
 
+// LogLineMsg and LogStreamEndedMsg carry the epoch of the follow stream that
+// produced them, so the app can ignore messages left over from a stream that
+// was already cancelled (e.g. after toggling follow off and on quickly).
 type LogLineMsg struct {
+	epoch int
 	Lines []string
 }
 
 type LogStreamEndedMsg struct {
-	Err error
+	epoch int
+	Err   error
 }
 
 func NewLogsModel() LogsModel {
