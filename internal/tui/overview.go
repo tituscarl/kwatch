@@ -430,15 +430,10 @@ func (o OverviewModel) renderHighMemory() string {
 	for _, p := range o.pods {
 		key := p.Namespace + "/" + p.Name
 		m, ok := o.metrics[key]
-		if !ok || m.Memory == "" || p.Resources.MemLim == "" {
+		if !ok || m.MemoryBytes == 0 || p.Resources.MemLimitBytes == 0 {
 			continue
 		}
-		usageBytes := parseMemToBytes(m.Memory)
-		limitBytes := parseMemToBytes(p.Resources.MemLim)
-		if limitBytes == 0 {
-			continue
-		}
-		pct := float64(usageBytes) / float64(limitBytes) * 100
+		pct := float64(m.MemoryBytes) / float64(p.Resources.MemLimitBytes) * 100
 		if pct >= 90 {
 			entries = append(entries, highMemEntry{"pod", p.Name, pct, m.Memory, p.Resources.MemLim})
 		}
@@ -447,18 +442,14 @@ func (o OverviewModel) renderHighMemory() string {
 	// Check deployments (aggregate pods per deployment)
 	for _, dep := range o.deployments {
 		var totalUsageBytes, totalLimitBytes int64
-		prefix := dep.Name + "-"
 		for _, pod := range o.pods {
-			if pod.Namespace != dep.Namespace {
+			if pod.Namespace != dep.Namespace || pod.Deployment != dep.Name {
 				continue
 			}
-			if !strings.HasPrefix(pod.Name, prefix) {
-				continue
-			}
-			totalLimitBytes += parseMemToBytes(pod.Resources.MemLim)
+			totalLimitBytes += pod.Resources.MemLimitBytes
 			key := pod.Namespace + "/" + pod.Name
 			if m, ok := o.metrics[key]; ok {
-				totalUsageBytes += parseMemToBytes(m.Memory)
+				totalUsageBytes += m.MemoryBytes
 			}
 		}
 		if totalLimitBytes == 0 {

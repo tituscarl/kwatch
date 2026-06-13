@@ -27,8 +27,11 @@ func (c *Client) GetPodLogs(namespace, podName, container string, tailLines int6
 		Timestamps: true,
 	}
 
+	ctx, cancel := c.reqCtx()
+	defer cancel()
+
 	req := c.clientset.CoreV1().Pods(namespace).GetLogs(podName, opts)
-	stream, err := req.Stream(context.Background())
+	stream, err := req.Stream(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get logs: %w", err)
 	}
@@ -127,8 +130,11 @@ func (c *Client) GetMultiPodLogs(namespace string, pods []PodInfo, tailLines int
 				Timestamps: true,
 			}
 
+			ctx, cancel := c.reqCtx()
+			defer cancel()
+
 			req := c.clientset.CoreV1().Pods(namespace).GetLogs(p.Name, opts)
-			stream, err := req.Stream(context.Background())
+			stream, err := req.Stream(ctx)
 			if err != nil {
 				return
 			}

@@ -1,7 +1,6 @@
 package k8s
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -9,13 +8,16 @@ import (
 )
 
 func (c *Client) ListDeployments(namespace string) ([]DeploymentInfo, error) {
-	deploys, err := c.clientset.AppsV1().Deployments(namespace).List(context.Background(), metav1.ListOptions{})
+	ctx, cancel := c.reqCtx()
+	defer cancel()
+
+	deploys, err := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list deployments: %w", err)
 	}
 
 	// Fetch all ReplicaSets to find the newest per deployment
-	rsList, _ := c.clientset.AppsV1().ReplicaSets(namespace).List(context.Background(), metav1.ListOptions{})
+	rsList, _ := c.clientset.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
 	// Build map: deployment UID -> newest RS creation time
 	newestRS := make(map[string]time.Time)
 	if rsList != nil {
@@ -68,7 +70,10 @@ func (c *Client) ListDeployments(namespace string) ([]DeploymentInfo, error) {
 
 // ListDeploymentPods returns pods belonging to a deployment (read-only).
 func (c *Client) ListDeploymentPods(namespace, deploymentName string) ([]PodInfo, error) {
-	deploy, err := c.clientset.AppsV1().Deployments(namespace).Get(context.Background(), deploymentName, metav1.GetOptions{})
+	ctx, cancel := c.reqCtx()
+	defer cancel()
+
+	deploy, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment: %w", err)
 	}
@@ -78,7 +83,7 @@ func (c *Client) ListDeploymentPods(namespace, deploymentName string) ([]PodInfo
 		return nil, fmt.Errorf("failed to parse selector: %w", err)
 	}
 
-	pods, err := c.clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
+	pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: selector.String(),
 	})
 	if err != nil {

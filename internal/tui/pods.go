@@ -302,11 +302,13 @@ func (p PodsModel) rowValues(pod k8s.PodInfo) []string {
 
 	cpu := ""
 	mem := ""
+	var memBytes int64
 	if p.metricsAvail && p.metrics != nil {
 		key := pod.Namespace + "/" + pod.Name
 		if m, ok := p.metrics[key]; ok {
 			cpu = m.CPU
 			mem = m.Memory
+			memBytes = m.MemoryBytes
 		}
 	}
 
@@ -320,10 +322,7 @@ func (p PodsModel) rowValues(pod k8s.PodInfo) []string {
 
 	if p.metricsAvail {
 		memLim := pod.Resources.MemLim
-		memPct := ""
-		if mem != "" && memLim != "" {
-			memPct = calcMemPct(mem, memLim)
-		}
+		memPct := memPctString(memBytes, pod.Resources.MemLimitBytes)
 		vals = append(vals, cpu, mem, memLim, memPct)
 	}
 
@@ -421,34 +420,15 @@ func memPctStyle(val string) lipgloss.Style {
 	}
 }
 
-func calcMemPct(usage, limit string) string {
-	usageBytes := parseMemToBytes(usage)
-	limitBytes := parseMemToBytes(limit)
-	if limitBytes == 0 {
+// memPctString formats memory utilization from raw byte counts. Working in
+// bytes avoids the precision loss of re-parsing a rounded display string
+// (e.g. 1.99Gi shown as "1Gi" would otherwise read as 50% of a 2Gi limit).
+func memPctString(usageBytes, limitBytes int64) string {
+	if usageBytes <= 0 || limitBytes <= 0 {
 		return ""
 	}
 	pct := float64(usageBytes) / float64(limitBytes) * 100
 	return fmt.Sprintf("%.0f%%", pct)
-}
-
-func parseMemToBytes(s string) int64 {
-	var val int64
-	switch {
-	case len(s) > 2 && s[len(s)-2:] == "Gi":
-		fmt.Sscanf(s, "%dGi", &val)
-		return val * 1024 * 1024 * 1024
-	case len(s) > 2 && s[len(s)-2:] == "Mi":
-		fmt.Sscanf(s, "%dMi", &val)
-		return val * 1024 * 1024
-	case len(s) > 2 && s[len(s)-2:] == "Ki":
-		fmt.Sscanf(s, "%dKi", &val)
-		return val * 1024
-	case len(s) > 1 && s[len(s)-1:] == "B":
-		fmt.Sscanf(s, "%dB", &val)
-		return val
-	default:
-		return 0
-	}
 }
 
 func formatAge(d interface{ Hours() float64 }) string {

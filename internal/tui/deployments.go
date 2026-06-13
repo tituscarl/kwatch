@@ -18,18 +18,18 @@ type DeploymentResourceStats struct {
 }
 
 type DeploymentsModel struct {
-	deployments      []k8s.DeploymentInfo
-	resourceStats    map[string]DeploymentResourceStats // key: namespace/name
-	resourcesLoaded  bool                               // true after first stats update
-	cursor           int
-	offset           int
-	width            int
-	height           int
-	allNS            bool
-	filter           string
-	filtering        bool
-	sortCol          int
-	sortAsc          bool
+	deployments     []k8s.DeploymentInfo
+	resourceStats   map[string]DeploymentResourceStats // key: namespace/name
+	resourcesLoaded bool                               // true after first stats update
+	cursor          int
+	offset          int
+	width           int
+	height          int
+	allNS           bool
+	filter          string
+	filtering       bool
+	sortCol         int
+	sortAsc         bool
 }
 
 func NewDeploymentsModel(allNS bool) DeploymentsModel {
@@ -39,24 +39,20 @@ func NewDeploymentsModel(allNS bool) DeploymentsModel {
 func (d *DeploymentsModel) UpdateResourceStats(pods []k8s.PodInfo, metrics map[string]k8s.PodMetrics) {
 	stats := make(map[string]DeploymentResourceStats)
 	hasMetrics := metrics != nil && len(metrics) > 0
-	// Group pods by deployment name prefix
+	// Group pods by their owning deployment
 	for _, dep := range d.deployments {
 		var totalUsageBytes, totalLimitBytes int64
-		prefix := dep.Name + "-"
 		for _, pod := range pods {
-			if pod.Namespace != dep.Namespace {
-				continue
-			}
-			if !strings.HasPrefix(pod.Name, prefix) {
+			if pod.Namespace != dep.Namespace || pod.Deployment != dep.Name {
 				continue
 			}
 			// Memory limit from pod spec
-			totalLimitBytes += parseMemToBytes(pod.Resources.MemLim)
+			totalLimitBytes += pod.Resources.MemLimitBytes
 			// Memory usage from metrics
 			if hasMetrics {
 				key := pod.Namespace + "/" + pod.Name
 				if m, ok := metrics[key]; ok {
-					totalUsageBytes += parseMemToBytes(m.Memory)
+					totalUsageBytes += m.MemoryBytes
 				}
 			}
 		}

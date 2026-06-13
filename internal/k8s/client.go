@@ -3,12 +3,18 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
 )
+
+// apiTimeout bounds every one-shot List/Get so a slow or unreachable API
+// server can't hang startup or leave fetch goroutines stuck forever. Log
+// follow streams are long-lived and use the caller's context instead.
+const apiTimeout = 10 * time.Second
 
 type Client struct {
 	clientset        kubernetes.Interface
@@ -18,6 +24,11 @@ type Client struct {
 	serverURL        string
 	defaultNamespace string
 	metricsAvail     bool
+}
+
+// reqCtx returns a context bounded by apiTimeout. Callers must defer cancel().
+func (c *Client) reqCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), apiTimeout)
 }
 
 type ClusterInfo struct {
@@ -94,7 +105,9 @@ func NewClient(kubeconfig, kubeContext string) (*Client, error) {
 }
 
 func (c *Client) probeMetrics() bool {
-	_, err := c.metricsClient.MetricsV1beta1().PodMetricses("").List(context.Background(), metav1.ListOptions{Limit: 1})
+	ctx, cancel := c.reqCtx()
+	defer cancel()
+	_, err := c.metricsClient.MetricsV1beta1().PodMetricses("").List(ctx, metav1.ListOptions{Limit: 1})
 	return err == nil
 }
 

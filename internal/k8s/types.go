@@ -12,6 +12,7 @@ type PodInfo struct {
 	Node       string
 	CPU        string // "120m" or ""
 	Memory     string // "256Mi" or ""
+	Deployment string // owning deployment name, "" if not owned by one
 	Resources  PodResources
 	Containers []ContainerInfo
 	OOMKilled  bool // true if any container was OOMKilled (current or last state)
@@ -19,18 +20,18 @@ type PodInfo struct {
 }
 
 type ContainerInfo struct {
-	Name            string
-	Ready           bool
-	State           string
-	Restarts        int32
-	Image           string
-	CPUReq          string // e.g. "100m"
-	CPULim          string // e.g. "500m"
-	MemReq          string // e.g. "128Mi"
-	MemLim          string // e.g. "512Mi"
-	LastTermReason  string // Last terminated reason (e.g. "OOMKilled")
-	LastTermCode    int32  // Last terminated exit code
-	LastTermAt      string // When it was last terminated
+	Name           string
+	Ready          bool
+	State          string
+	Restarts       int32
+	Image          string
+	CPUReq         string // e.g. "100m"
+	CPULim         string // e.g. "500m"
+	MemReq         string // e.g. "128Mi"
+	MemLim         string // e.g. "512Mi"
+	LastTermReason string // Last terminated reason (e.g. "OOMKilled")
+	LastTermCode   int32  // Last terminated exit code
+	LastTermAt     string // When it was last terminated
 }
 
 type OOMEvent struct {
@@ -56,6 +57,10 @@ type PodResources struct {
 	CPULim string
 	MemReq string
 	MemLim string
+
+	// Raw byte limit kept alongside the formatted MemLim string so utilization
+	// math doesn't have to re-parse a rounded display value.
+	MemLimitBytes int64
 }
 
 type DeploymentInfo struct {
@@ -84,4 +89,7 @@ type EventInfo struct {
 type PodMetrics struct {
 	CPU    string // e.g. "120m"
 	Memory string // e.g. "256Mi"
+
+	// Raw memory usage in bytes, before formatting lost precision.
+	MemoryBytes int64
 }

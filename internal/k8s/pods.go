@@ -1,8 +1,8 @@
 package k8s
 
 import (
-	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -10,7 +10,10 @@ import (
 )
 
 func (c *Client) ListPods(namespace string) ([]PodInfo, error) {
-	pods, err := c.clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
+	ctx, cancel := c.reqCtx()
+	defer cancel()
+
+	pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pods: %w", err)
 	}
@@ -100,6 +103,7 @@ func podToInfo(pod corev1.Pod) PodInfo {
 	}
 	if totalMemLim > 0 {
 		resources.MemLim = formatMemory(totalMemLim)
+		resources.MemLimitBytes = totalMemLim
 	}
 
 	// Detect OOMKilled from current or last termination state
@@ -131,11 +135,29 @@ func podToInfo(pod corev1.Pod) PodInfo {
 		Restarts:   restarts,
 		Age:        age,
 		Node:       pod.Spec.NodeName,
+		Deployment: deploymentOf(pod),
 		Resources:  resources,
 		Containers: containers,
 		OOMKilled:  oomKilled,
 		Crashed:    crashed,
 	}
+}
+
+// deploymentOf resolves the deployment a pod belongs to via its controlling
+// ReplicaSet. A deployment's ReplicaSet is always named "<deployment>-<hash>"
+// where the pod-template-hash never contains a dash, so trimming the final
+// segment recovers the deployment name exactly — unlike a name-prefix match,
+// which confuses "api" with "api-server".
+func deploymentOf(pod corev1.Pod) string {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind != "ReplicaSet" {
+			continue
+		}
+		if idx := strings.LastIndex(ref.Name, "-"); idx > 0 {
+			return ref.Name[:idx]
+		}
+	}
+	return ""
 }
 
 func derivePodStatus(pod corev1.Pod) string {

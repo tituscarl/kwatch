@@ -1,7 +1,6 @@
 package k8s
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -10,7 +9,10 @@ import (
 )
 
 func (c *Client) ListEvents(namespace string) ([]EventInfo, error) {
-	events, err := c.clientset.CoreV1().Events(namespace).List(context.Background(), metav1.ListOptions{})
+	ctx, cancel := c.reqCtx()
+	defer cancel()
+
+	events, err := c.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list events: %w", err)
 	}

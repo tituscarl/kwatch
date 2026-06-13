@@ -1,7 +1,6 @@
 package k8s
 
 import (
-	"context"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -12,7 +11,10 @@ func (c *Client) GetPodMetrics(namespace string) (map[string]PodMetrics, error) 
 		return nil, nil
 	}
 
-	metricsList, err := c.metricsClient.MetricsV1beta1().PodMetricses(namespace).List(context.Background(), metav1.ListOptions{})
+	ctx, cancel := c.reqCtx()
+	defer cancel()
+
+	metricsList, err := c.metricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pod metrics: %w", err)
 	}
@@ -27,8 +29,9 @@ func (c *Client) GetPodMetrics(namespace string) (map[string]PodMetrics, error) 
 
 		key := pm.Namespace + "/" + pm.Name
 		result[key] = PodMetrics{
-			CPU:    fmt.Sprintf("%dm", totalCPU),
-			Memory: formatMemory(totalMem),
+			CPU:         fmt.Sprintf("%dm", totalCPU),
+			Memory:      formatMemory(totalMem),
+			MemoryBytes: totalMem,
 		}
 	}
 

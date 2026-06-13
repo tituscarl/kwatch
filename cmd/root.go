@@ -79,6 +79,11 @@ func run(cmd *cobra.Command, args []string) error {
 		ns = client.DefaultNamespace()
 	}
 
+	// A zero or negative interval makes tea.Tick fire continuously and hammer
+	// the API server, so hold it to a sane floor.
+	if refreshSecs < 1 {
+		refreshSecs = 1
+	}
 	refreshInterval := time.Duration(refreshSecs) * time.Second
 
 	app := tui.NewApp(client, ns, allNamespaces, refreshInterval, Version)
