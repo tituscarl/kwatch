@@ -14,11 +14,22 @@ import (
 
 const maxLogLines = 5000
 
+// logSeverity is a line's cached highlight class, computed once when the line
+// is added so rendering doesn't re-scan the text on every frame.
+type logSeverity uint8
+
+const (
+	sevNormal logSeverity = iota
+	sevWarn
+	sevError
+)
+
 type LogsModel struct {
 	podName   string
 	namespace string
 	container string
 	lines     []string
+	severity  []logSeverity // parallel to lines; cached highlight class
 	offset    int
 	width     int
 	height    int
@@ -73,6 +84,7 @@ func (l *LogsModel) Show(podName, namespace, container string) {
 	l.podCount = 0
 	l.loading = true
 	l.lines = nil
+	l.severity = nil
 	l.offset = 0
 	l.err = nil
 	l.following = false
@@ -95,6 +107,7 @@ func (l *LogsModel) ShowMultiPod(deploymentName, namespace string, podCount int)
 	l.podCount = podCount
 	l.loading = true
 	l.lines = nil
+	l.severity = nil
 	l.offset = 0
 	l.err = nil
 	l.following = false
@@ -171,8 +184,12 @@ func (l *LogsModel) refilter() {
 		l.filterRegex = nil
 		return
 	}
-	l.compileFilter()
-	l.matchLines = nil
+	// Reuse the compiled regex — it only changes when the term or case
+	// sensitivity does, and those paths clear it explicitly.
+	if l.filterRegex == nil {
+		l.compileFilter()
+	}
+	l.matchLines = l.matchLines[:0]
 	for i, line := range l.lines {
 		if l.filterRegex.MatchString(line) {
 			l.matchLines = append(l.matchLines, i)
@@ -188,11 +205,16 @@ func (l *LogsModel) UpdateLogs(content string, err error) {
 	if err != nil {
 		l.err = err
 		l.lines = nil
+		l.severity = nil
 		l.matchLines = nil
 		return
 	}
 	l.err = nil
 	l.lines = strings.Split(content, "\n")
+	l.severity = l.severity[:0]
+	for _, line := range l.lines {
+		l.severity = append(l.severity, classify(line))
+	}
 	l.refilter()
 	// Auto-scroll to bottom
 	if l.atBottom {
@@ -204,20 +226,28 @@ func (l *LogsModel) UpdateLogs(content string, err error) {
 }
 
 func (l *LogsModel) AppendLines(lines []string) {
-	trimmed := 0
+	base := len(l.lines)
 	l.lines = append(l.lines, lines...)
-	// Cap total lines to prevent unbounded memory growth
-	if len(l.lines) > maxLogLines {
-		trimmed = len(l.lines) - maxLogLines
-		l.lines = l.lines[trimmed:]
-		l.refilter() // indices shift after trimming
-	} else if l.filterRegex != nil {
-		// Check new lines against filter
-		base := len(l.lines) - len(lines)
+	for _, line := range lines {
+		l.severity = append(l.severity, classify(line))
+	}
+	// Extend the match set with any new lines that match — cheaper than
+	// re-running the regex over the whole buffer.
+	if l.filterRegex != nil {
 		for i, line := range lines {
 			if l.filterRegex.MatchString(line) {
 				l.matchLines = append(l.matchLines, base+i)
 			}
+		}
+	}
+	// Cap total lines to prevent unbounded memory growth.
+	trimmed := 0
+	if len(l.lines) > maxLogLines {
+		trimmed = len(l.lines) - maxLogLines
+		l.lines = l.lines[trimmed:]
+		l.severity = l.severity[trimmed:]
+		if l.filterTerm != "" {
+			l.shiftMatches(trimmed)
 		}
 	}
 	// Adjust cursor after trim (normal mode only — filter mode uses matchCursor)
@@ -230,6 +260,22 @@ func (l *LogsModel) AppendLines(lines []string) {
 		l.cursor = max(l.displayLineCount()-1, 0)
 	} else if l.cursor >= l.displayLineCount() {
 		l.cursor = max(l.displayLineCount()-1, 0)
+	}
+}
+
+// shiftMatches re-bases match indices after the oldest `trimmed` lines were
+// dropped, discarding matches that scrolled off the top.
+func (l *LogsModel) shiftMatches(trimmed int) {
+	dst := 0
+	for _, idx := range l.matchLines {
+		if ni := idx - trimmed; ni >= 0 {
+			l.matchLines[dst] = ni
+			dst++
+		}
+	}
+	l.matchLines = l.matchLines[:dst]
+	if l.matchCursor >= len(l.matchLines) {
+		l.matchCursor = max(0, len(l.matchLines)-1)
 	}
 }
 
@@ -269,6 +315,7 @@ func (l LogsModel) Update(msg tea.KeyPressMsg) LogsModel {
 			l.filtering = false
 			if l.filterInput != "" {
 				l.filterTerm = l.filterInput
+				l.filterRegex = nil // force recompile for the new term
 				l.refilter()
 				l.offset = l.maxOffset()
 				l.atBottom = true
@@ -295,6 +342,7 @@ func (l LogsModel) Update(msg tea.KeyPressMsg) LogsModel {
 	case "i":
 		if l.filterTerm != "" {
 			l.filterCaseSense = !l.filterCaseSense
+			l.filterRegex = nil // case prefix changed; recompile
 			l.refilter()
 			return l
 		}
@@ -500,6 +548,7 @@ func (l LogsModel) View() string {
 	lineNumWidth := len(fmt.Sprintf("%d", len(l.lines)))
 	lineNumStyle := lipgloss.NewStyle().Foreground(colorDimText).Width(lineNumWidth + 1)
 	logLineStyle := lipgloss.NewStyle().Foreground(colorWhite)
+	cursorStyle := lipgloss.NewStyle().Foreground(colorPurple).Bold(true)
 
 	// Truncation width: outer box width minus border (2) and padding (4).
 	// Long lines would otherwise wrap and push the bottom bar off-screen.
@@ -521,38 +570,20 @@ func (l LogsModel) View() string {
 			for i := start; i < end; i++ {
 				origIdx := l.matchLines[i]
 				lineNum := lineNumStyle.Render(fmt.Sprintf("%d", origIdx+1))
-				fullLine := l.lines[origIdx]
+				line := l.lines[origIdx]
+				base := severityStyle(l.severity[origIdx], logLineStyle)
 
-				// Check severity on full line BEFORE truncation
-				isError := containsLogLevel(fullLine, "error", "fatal", "panic", "ERRO", "FATA") || isKlogError(fullLine)
-				isWarn := containsLogLevel(fullLine, "warn", "WARN") || isKlogWarn(fullLine)
-
-				line := fullLine
-
-				// Style with match highlighting
 				var styled string
 				if l.multiPod {
-					if isError {
-						styled = renderPodLineHighlighted(line, l.filterRegex, StyleFailed)
-					} else if isWarn {
-						styled = renderPodLineHighlighted(line, l.filterRegex, StyleWarning)
-					} else {
-						styled = renderPodLineHighlighted(line, l.filterRegex, logLineStyle)
-					}
+					styled = renderPodLineHighlighted(line, l.filterRegex, base)
 				} else {
-					if isError {
-						styled = highlightMatches(line, l.filterRegex, StyleFailed)
-					} else if isWarn {
-						styled = highlightMatches(line, l.filterRegex, StyleWarning)
-					} else {
-						styled = highlightMatches(line, l.filterRegex, logLineStyle)
-					}
+					styled = highlightMatches(line, l.filterRegex, base)
 				}
 
 				// Mark current match with indicator
 				var row string
 				if i == l.matchCursor {
-					row = lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render("▸") + lineNum + " " + styled
+					row = cursorStyle.Render("▸") + lineNum + " " + styled
 				} else {
 					row = " " + lineNum + " " + styled
 				}
@@ -569,35 +600,18 @@ func (l LogsModel) View() string {
 
 		for i := start; i < end; i++ {
 			lineNum := lineNumStyle.Render(fmt.Sprintf("%d", i+1))
-			fullLine := l.lines[i]
-
-			// Check severity on full line BEFORE truncation
-			isError := containsLogLevel(fullLine, "error", "fatal", "panic", "ERRO", "FATA") || isKlogError(fullLine)
-			isWarn := containsLogLevel(fullLine, "warn", "WARN") || isKlogWarn(fullLine)
-
-			line := fullLine
+			line := l.lines[i]
+			base := severityStyle(l.severity[i], logLineStyle)
 
 			var styled string
 			if l.multiPod {
-				if isError {
-					styled = renderPodLine(line, StyleFailed)
-				} else if isWarn {
-					styled = renderPodLine(line, StyleWarning)
-				} else {
-					styled = renderPodLine(line, logLineStyle)
-				}
+				styled = renderPodLine(line, base)
 			} else {
-				if isError {
-					styled = StyleFailed.Render(line)
-				} else if isWarn {
-					styled = StyleWarning.Render(line)
-				} else {
-					styled = logLineStyle.Render(line)
-				}
+				styled = base.Render(line)
 			}
 			var row string
 			if i == l.cursor {
-				row = lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render("▸") + lineNum + " " + styled
+				row = cursorStyle.Render("▸") + lineNum + " " + styled
 			} else {
 				row = " " + lineNum + " " + styled
 			}
@@ -632,14 +646,45 @@ func (l LogsModel) maxOffset() int {
 	return max(l.displayLineCount()-l.visibleLines(), 0)
 }
 
-func containsLogLevel(line string, levels ...string) bool {
+// Severity keywords, kept lowercase so a line only has to be lowercased once.
+var (
+	errorKeywords = []string{"error", "fatal", "panic", "erro", "fata"}
+	warnKeywords  = []string{"warn"}
+)
+
+// classify determines a line's highlight severity. Error outranks warning, and
+// klog-style level prefixes (E/F/W) are checked alongside substring keywords.
+func classify(line string) logSeverity {
 	lower := strings.ToLower(line)
-	for _, level := range levels {
-		if strings.Contains(lower, strings.ToLower(level)) {
+	if isKlogError(line) || containsAny(lower, errorKeywords) {
+		return sevError
+	}
+	if isKlogWarn(line) || containsAny(lower, warnKeywords) {
+		return sevWarn
+	}
+	return sevNormal
+}
+
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
 			return true
 		}
 	}
 	return false
+}
+
+// severityStyle maps a cached severity to its display style, falling back to
+// the supplied base style for normal lines.
+func severityStyle(sev logSeverity, base lipgloss.Style) lipgloss.Style {
+	switch sev {
+	case sevError:
+		return StyleFailed
+	case sevWarn:
+		return StyleWarning
+	default:
+		return base
+	}
 }
 
 // isKlogError detects klog E (error) and F (fatal) prefixes like "E0323" or "F0323".

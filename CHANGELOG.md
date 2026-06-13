@@ -7,6 +7,13 @@
 - **Mouse wheel scrolling.** The wheel now scrolls whichever view has focus —
   logs, detail, pod picker, or the pods/deployments/events tables.
 
+### Performance
+
+- **Faster log viewer under heavy output.** Line severity (error/warn) is now
+  classified once when a line arrives instead of on every frame, the grep
+  regex is compiled once instead of on every refresh, and trimming the buffer
+  re-bases existing matches rather than rescanning all 5000 lines.
+
 ### Fixed
 
 - **More kubeconfigs load.** Registered the oidc, gcp, and azure auth providers,
