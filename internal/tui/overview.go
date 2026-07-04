@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/tituscarl/kwatch/internal/k8s"
@@ -271,32 +272,50 @@ func (o OverviewModel) renderAttention() string {
 		name     string
 		reason   string
 		detail   string
-		severity int // 0=critical, 1=warning
+		severity int       // 0=critical, 1=warning
+		when     time.Time // when the issue (last) happened, zero if unknown
 	}
 
 	var issues []issue
+	now := time.Now()
 
 	for _, p := range o.pods {
+		// Pod creation is the fallback "when" for issues without a
+		// termination timestamp — a pod stuck Pending or failing to pull
+		// has been a problem since it was created.
+		created := now.Add(-p.Age)
+
 		switch p.Status {
 		case "CrashLoopBackOff":
 			detail := fmt.Sprintf("%d restarts", p.Restarts)
-			issues = append(issues, issue{"⟳", "pod", p.Name, "CrashLoopBackOff", detail, 0})
+			issues = append(issues, issue{"⟳", "pod", p.Name, "CrashLoopBackOff", detail, 0, anyTermTime(p)})
 		case "OOMKilled":
 			detail := ""
 			if p.Resources.MemLim != "" {
 				detail = "limit: " + p.Resources.MemLim
 			}
-			issues = append(issues, issue{"✗", "pod", p.Name, "OOMKilled", detail, 0})
+			t := termTime(p, true)
+			if !t.IsZero() {
+				if detail != "" {
+					detail += ", "
+				}
+				detail += "at " + formatTimestamp(t)
+			}
+			issues = append(issues, issue{"✗", "pod", p.Name, "OOMKilled", detail, 0, t})
 		case "ImagePullBackOff", "ErrImagePull":
 			detail := ""
 			if len(p.Containers) > 0 {
 				detail = p.Containers[0].Image
 			}
-			issues = append(issues, issue{"✗", "pod", p.Name, p.Status, detail, 0})
+			issues = append(issues, issue{"✗", "pod", p.Name, p.Status, detail, 0, created})
 		case "Error", "Failed":
-			issues = append(issues, issue{"✗", "pod", p.Name, p.Status, "", 0})
+			t := anyTermTime(p)
+			if t.IsZero() {
+				t = created
+			}
+			issues = append(issues, issue{"✗", "pod", p.Name, p.Status, "", 0, t})
 		case "Pending", "ContainerCreating":
-			issues = append(issues, issue{"◌", "pod", p.Name, p.Status, "", 1})
+			issues = append(issues, issue{"◌", "pod", p.Name, p.Status, "", 1, created})
 		}
 		// Detect recovered OOM (running but was OOMKilled)
 		if p.OOMKilled && p.Status == "Running" {
@@ -304,7 +323,11 @@ func (o OverviewModel) renderAttention() string {
 			if p.Resources.MemLim != "" {
 				detail += ", limit: " + p.Resources.MemLim
 			}
-			issues = append(issues, issue{"⚡", "pod", p.Name, "OOMKilled (recovered)", detail, 1})
+			t := termTime(p, true)
+			if !t.IsZero() {
+				detail += ", at " + formatTimestamp(t)
+			}
+			issues = append(issues, issue{"⚡", "pod", p.Name, "OOMKilled (recovered)", detail, 1, t})
 		}
 		// Detect recovered crash (running but had non-zero exit)
 		if p.Crashed && p.Status == "Running" {
@@ -315,7 +338,11 @@ func (o OverviewModel) renderAttention() string {
 					break
 				}
 			}
-			issues = append(issues, issue{"⚡", "pod", p.Name, "Crashed (recovered)", detail, 1})
+			t := termTime(p, false)
+			if !t.IsZero() {
+				detail += ", at " + formatTimestamp(t)
+			}
+			issues = append(issues, issue{"⚡", "pod", p.Name, "Crashed (recovered)", detail, 1, t})
 		}
 	}
 
@@ -323,7 +350,8 @@ func (o OverviewModel) renderAttention() string {
 	for _, d := range o.deployments {
 		if d.Available < d.Desired {
 			detail := fmt.Sprintf("%d/%d available", d.Available, d.Desired)
-			issues = append(issues, issue{"▾", "deploy", d.Name, "Under-replicated", detail, 1})
+			// Under-replication usually starts at the last rollout
+			issues = append(issues, issue{"▾", "deploy", d.Name, "Under-replicated", detail, 1, now.Add(-d.LastDeploy)})
 		}
 	}
 
@@ -331,11 +359,12 @@ func (o OverviewModel) renderAttention() string {
 	type restarter struct {
 		name     string
 		restarts int32
+		when     time.Time
 	}
 	var restarters []restarter
 	for _, p := range o.pods {
 		if p.Status == "Running" && p.Restarts >= 5 {
-			restarters = append(restarters, restarter{p.Name, p.Restarts})
+			restarters = append(restarters, restarter{p.Name, p.Restarts, anyTermTime(p)})
 		}
 	}
 	sort.Slice(restarters, func(i, j int) bool {
@@ -354,7 +383,7 @@ func (o OverviewModel) renderAttention() string {
 		}
 		if !alreadyListed {
 			issues = append(issues, issue{"↻", "pod", r.name,
-				fmt.Sprintf("%d restarts", r.restarts), "running but unstable", 1})
+				fmt.Sprintf("%d restarts", r.restarts), "running but unstable", 1, r.when})
 		}
 	}
 
@@ -362,9 +391,13 @@ func (o OverviewModel) renderAttention() string {
 		return ""
 	}
 
-	// Sort: critical first, then warning
+	// Sort: critical first, then warning; most recent first within each
+	// severity. Issues with no known timestamp sink to the bottom of their band.
 	sort.SliceStable(issues, func(i, j int) bool {
-		return issues[i].severity < issues[j].severity
+		if issues[i].severity != issues[j].severity {
+			return issues[i].severity < issues[j].severity
+		}
+		return issues[i].when.After(issues[j].when)
 	})
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorRed)
@@ -407,6 +440,38 @@ func (o OverviewModel) renderAttention() string {
 		Width(o.width - 6)
 
 	return boxStyle.Render(strings.Join(lines, "\n"))
+}
+
+// termTime returns when the pod's last OOM kill (oom=true) or non-OOM crash
+// (oom=false) happened. Picks the most recent matching container, same
+// matching rules as the detection in k8s/pods.go. Zero when unknown.
+func termTime(p k8s.PodInfo, oom bool) time.Time {
+	var t time.Time
+	for _, c := range p.Containers {
+		isOOM := c.State == "OOMKilled" || c.LastTermReason == "OOMKilled"
+		if oom && !isOOM {
+			continue
+		}
+		if !oom && (isOOM || c.LastTermCode == 0 || c.LastTermReason == "") {
+			continue
+		}
+		if c.LastTermTime.After(t) {
+			t = c.LastTermTime
+		}
+	}
+	return t
+}
+
+// anyTermTime returns the pod's most recent container termination regardless
+// of reason. Zero when none is known.
+func anyTermTime(p k8s.PodInfo) time.Time {
+	var t time.Time
+	for _, c := range p.Containers {
+		if c.LastTermTime.After(t) {
+			t = c.LastTermTime
+		}
+	}
+	return t
 }
 
 // --- High Memory ---

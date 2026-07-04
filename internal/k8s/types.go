@@ -29,9 +29,10 @@ type ContainerInfo struct {
 	CPULim         string // e.g. "500m"
 	MemReq         string // e.g. "128Mi"
 	MemLim         string // e.g. "512Mi"
-	LastTermReason string // Last terminated reason (e.g. "OOMKilled")
-	LastTermCode   int32  // Last terminated exit code
-	LastTermAt     string // When it was last terminated
+	LastTermReason string    // Last terminated reason (e.g. "OOMKilled")
+	LastTermCode   int32     // Last terminated exit code
+	LastTermAt     string    // When it was last terminated, relative ("5m ago")
+	LastTermTime   time.Time // Actual termination timestamp, zero if unknown
 }
 
 type OOMEvent struct {

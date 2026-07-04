@@ -86,8 +86,8 @@ func (d *DetailModel) ShowPod(pod k8s.PodInfo) {
 			}
 			if c.LastTermReason == "OOMKilled" {
 				oomMsg := StyleFailed.Render("    *** OOMKilled")
-				if c.LastTermAt != "" {
-					oomMsg += StyleFailed.Render(fmt.Sprintf(" (%s)", c.LastTermAt))
+				if when := termWhen(c); when != "" {
+					oomMsg += StyleFailed.Render(fmt.Sprintf(" (%s)", when))
 				}
 				if c.MemLim != "" {
 					oomMsg += StyleWarning.Render(fmt.Sprintf(" — limit was %s, consider increasing", c.MemLim))
@@ -95,8 +95,8 @@ func (d *DetailModel) ShowPod(pod k8s.PodInfo) {
 				b.WriteString(oomMsg + "\n")
 			} else if c.LastTermCode != 0 && c.LastTermReason != "" {
 				crashMsg := StyleFailed.Render(fmt.Sprintf("    *** Crashed (exit code %d)", c.LastTermCode))
-				if c.LastTermAt != "" {
-					crashMsg += StyleFailed.Render(fmt.Sprintf(" (%s)", c.LastTermAt))
+				if when := termWhen(c); when != "" {
+					crashMsg += StyleFailed.Render(fmt.Sprintf(" (%s)", when))
 				}
 				crashMsg += StyleWarning.Render(" — check logs for panic/error details")
 				b.WriteString(crashMsg + "\n")
@@ -106,6 +106,19 @@ func (d *DetailModel) ShowPod(pod k8s.PodInfo) {
 
 	d.content = b.String()
 	d.lines = strings.Count(d.content, "\n") + 1
+}
+
+// termWhen combines the relative age and absolute time of a container's last
+// termination, e.g. "5m ago, Jul 2 14:33".
+func termWhen(c k8s.ContainerInfo) string {
+	s := c.LastTermAt
+	if !c.LastTermTime.IsZero() {
+		if s != "" {
+			s += ", "
+		}
+		s += formatTimestamp(c.LastTermTime)
+	}
+	return s
 }
 
 func (d *DetailModel) ShowDeployment(dep k8s.DeploymentInfo) {

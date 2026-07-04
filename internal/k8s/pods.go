@@ -61,6 +61,7 @@ func podToInfo(pod corev1.Pod) PodInfo {
 			ci.LastTermCode = cs.LastTerminationState.Terminated.ExitCode
 			if !cs.LastTerminationState.Terminated.FinishedAt.IsZero() {
 				ci.LastTermAt = formatDuration(time.Since(cs.LastTerminationState.Terminated.FinishedAt.Time))
+				ci.LastTermTime = cs.LastTerminationState.Terminated.FinishedAt.Time
 			}
 		}
 

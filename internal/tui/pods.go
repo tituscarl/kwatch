@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -429,6 +430,16 @@ func memPctString(usageBytes, limitBytes int64) string {
 	}
 	pct := float64(usageBytes) / float64(limitBytes) * 100
 	return fmt.Sprintf("%.0f%%", pct)
+}
+
+// formatTimestamp renders an absolute local time, dropping the year when it's
+// the current one to keep the line short.
+func formatTimestamp(t time.Time) string {
+	t = t.Local()
+	if t.Year() != time.Now().Year() {
+		return t.Format("Jan 2 2006 15:04")
+	}
+	return t.Format("Jan 2 15:04")
 }
 
 func formatAge(d interface{ Hours() float64 }) string {
