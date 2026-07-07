@@ -32,6 +32,7 @@ func (c *Client) ListEvents(namespace string) ([]EventInfo, error) {
 			Object:    objRef,
 			Message:   e.Message,
 			Age:       age,
+			Timestamp: lastTime,
 			Count:     e.Count,
 			Namespace: e.Namespace,
 		})

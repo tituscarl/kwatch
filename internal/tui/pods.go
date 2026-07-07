@@ -14,6 +14,8 @@ import (
 
 type PodsModel struct {
 	pods         []k8s.PodInfo
+	filtered     []k8s.PodInfo // cached filter+sort result, rebuilt via refreshFiltered
+	longestName  int           // longest pod name, tracked so column sizing doesn't rescan per frame
 	metrics      map[string]k8s.PodMetrics
 	cursor       int
 	offset       int
@@ -36,8 +38,15 @@ func NewPodsModel(allNS bool, metricsAvail bool) PodsModel {
 
 func (p *PodsModel) UpdatePods(pods []k8s.PodInfo) {
 	p.pods = pods
-	if p.cursor >= len(pods) {
-		p.cursor = max(0, len(pods)-1)
+	p.longestName = 0
+	for _, pod := range pods {
+		if len(pod.Name) > p.longestName {
+			p.longestName = len(pod.Name)
+		}
+	}
+	p.refreshFiltered()
+	if p.cursor >= len(p.filtered) {
+		p.cursor = max(0, len(p.filtered)-1)
 	}
 }
 
@@ -51,9 +60,8 @@ func (p *PodsModel) SetSize(w, h int) {
 }
 
 func (p PodsModel) SelectedPod() (k8s.PodInfo, bool) {
-	filtered := p.filteredPods()
-	if p.cursor < len(filtered) {
-		return filtered[p.cursor], true
+	if p.cursor < len(p.filtered) {
+		return p.filtered[p.cursor], true
 	}
 	return k8s.PodInfo{}, false
 }
@@ -66,10 +74,12 @@ func (p *PodsModel) Update(msg tea.Msg) tea.Cmd {
 			case key.Matches(msg, Keys.Escape):
 				p.filtering = false
 				p.filter = ""
+				p.refreshFiltered()
 				return nil
 			case msg.Code == tea.KeyBackspace:
 				if len(p.filter) > 0 {
 					p.filter = p.filter[:len(p.filter)-1]
+					p.refreshFiltered()
 				}
 				return nil
 			case msg.Code == tea.KeyEnter:
@@ -80,6 +90,7 @@ func (p *PodsModel) Update(msg tea.Msg) tea.Cmd {
 				// Allow arrow keys to navigate while filtering
 			case msg.Text != "":
 				p.filter += msg.Text
+				p.refreshFiltered()
 				p.cursor = 0
 				p.offset = 0
 				return nil
@@ -92,8 +103,6 @@ func (p *PodsModel) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (p *PodsModel) handleNav(msg tea.KeyPressMsg) {
-	filtered := p.filteredPods()
-
 	switch msg.String() {
 	case "up", "k":
 		if p.cursor > 0 {
@@ -103,7 +112,7 @@ func (p *PodsModel) handleNav(msg tea.KeyPressMsg) {
 			}
 		}
 	case "down", "j":
-		if p.cursor < len(filtered)-1 {
+		if p.cursor < len(p.filtered)-1 {
 			p.cursor++
 			visibleRows := p.visibleRows()
 			if p.cursor >= p.offset+visibleRows {
@@ -113,16 +122,18 @@ func (p *PodsModel) handleNav(msg tea.KeyPressMsg) {
 	case "esc":
 		if p.filter != "" {
 			p.filter = ""
+			p.refreshFiltered()
 			p.cursor = 0
 			p.offset = 0
 		}
 	case "/":
 		p.filtering = true
 		p.filter = ""
+		p.refreshFiltered()
 		p.cursor = 0
 		p.offset = 0
 	case "pgdown":
-		p.cursor = min(p.cursor+p.visibleRows(), len(filtered)-1)
+		p.cursor = max(min(p.cursor+p.visibleRows(), len(p.filtered)-1), 0)
 		if p.cursor >= p.offset+p.visibleRows() {
 			p.offset = p.cursor - p.visibleRows() + 1
 		}
@@ -135,17 +146,19 @@ func (p *PodsModel) handleNav(msg tea.KeyPressMsg) {
 		cols := p.sortableColumns()
 		p.sortCol = (p.sortCol + 1) % len(cols)
 		p.sortAsc = true
+		p.refreshFiltered()
 		p.cursor = 0
 		p.offset = 0
 	case "S":
 		p.sortAsc = !p.sortAsc
+		p.refreshFiltered()
 		p.cursor = 0
 		p.offset = 0
 	}
 }
 
 func (p PodsModel) View() string {
-	filtered := p.filteredPods()
+	filtered := p.filtered
 
 	if len(p.pods) == 0 {
 		return lipgloss.NewStyle().
@@ -164,7 +177,8 @@ func (p PodsModel) View() string {
 	}
 
 	// Header
-	header := p.renderHeader()
+	cols := p.columns()
+	header := p.renderHeader(cols)
 	b.WriteString(header + "\n")
 
 	// Rows
@@ -172,7 +186,7 @@ func (p PodsModel) View() string {
 	end := min(p.offset+visibleRows, len(filtered))
 	for i := p.offset; i < end; i++ {
 		pod := filtered[i]
-		row := p.renderRow(pod, i == p.cursor)
+		row := p.renderRow(cols, pod, i == p.cursor)
 		b.WriteString(row + "\n")
 	}
 
@@ -185,8 +199,7 @@ func (p PodsModel) View() string {
 	return lipgloss.NewStyle().Padding(0, 1).Render(b.String())
 }
 
-func (p PodsModel) renderHeader() string {
-	cols := p.columns()
+func (p PodsModel) renderHeader(cols []column) string {
 	activeSort := p.activeSortCol()
 	var parts []string
 	for _, col := range cols {
@@ -203,9 +216,8 @@ func (p PodsModel) renderHeader() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
 
-func (p PodsModel) renderRow(pod k8s.PodInfo, selected bool) string {
-	cols := p.columns()
-	values := p.rowValues(pod)
+func (p PodsModel) renderRow(cols []column, pod k8s.PodInfo, selected bool) string {
+	values := p.rowValues(cols, pod)
 
 	selectedStyle := lipgloss.NewStyle().
 		Background(colorPurple).
@@ -275,7 +287,7 @@ func (p PodsModel) columns() []column {
 
 	// Fit the column to the longest pod name instead of soaking up
 	// every spare terminal column.
-	nameWidth := p.longestPodName() + 2
+	nameWidth := p.longestName + 2
 	if nameWidth > maxNameWidth {
 		nameWidth = maxNameWidth
 	}
@@ -303,17 +315,7 @@ func (p PodsModel) columns() []column {
 	return cols
 }
 
-func (p PodsModel) longestPodName() int {
-	longest := 0
-	for _, pod := range p.pods {
-		if len(pod.Name) > longest {
-			longest = len(pod.Name)
-		}
-	}
-	return longest
-}
-
-func (p PodsModel) rowValues(pod k8s.PodInfo) []string {
+func (p PodsModel) rowValues(cols []column, pod k8s.PodInfo) []string {
 	vals := []string{}
 	if p.allNS {
 		vals = append(vals, truncate(pod.Namespace, 14))
@@ -332,7 +334,7 @@ func (p PodsModel) rowValues(pod k8s.PodInfo) []string {
 	}
 
 	vals = append(vals,
-		truncate(pod.Name, p.columns()[len(vals)].width-2),
+		truncate(pod.Name, cols[len(vals)].width-2),
 		pod.Status,
 		pod.Ready,
 		fmt.Sprintf("%d", pod.Restarts),
@@ -360,7 +362,10 @@ func (p PodsModel) activeSortCol() string {
 	return ""
 }
 
-func (p PodsModel) filteredPods() []k8s.PodInfo {
+// refreshFiltered rebuilds the cached filter+sort result. Must be called after
+// the pod list, filter text, or sort order changes — View, navigation, and
+// selection all read the cache, so nothing re-sorts on every frame or keypress.
+func (p *PodsModel) refreshFiltered() {
 	var result []k8s.PodInfo
 	if p.filter == "" {
 		result = make([]k8s.PodInfo, len(p.pods))
@@ -400,7 +405,7 @@ func (p PodsModel) filteredPods() []k8s.PodInfo {
 		})
 	}
 
-	return result
+	p.filtered = result
 }
 
 func (p PodsModel) visibleRows() int {

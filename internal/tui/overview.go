@@ -505,27 +505,18 @@ func (o OverviewModel) renderHighMemory() string {
 	}
 
 	// Check deployments (aggregate pods per deployment)
+	byDeploy := aggregatePodMemory(o.pods, o.metrics)
 	for _, dep := range o.deployments {
-		var totalUsageBytes, totalLimitBytes int64
-		for _, pod := range o.pods {
-			if pod.Namespace != dep.Namespace || pod.Deployment != dep.Name {
-				continue
-			}
-			totalLimitBytes += pod.Resources.MemLimitBytes
-			key := pod.Namespace + "/" + pod.Name
-			if m, ok := o.metrics[key]; ok {
-				totalUsageBytes += m.MemoryBytes
-			}
-		}
-		if totalLimitBytes == 0 {
+		agg := byDeploy[dep.Namespace+"/"+dep.Name]
+		if agg.limitBytes == 0 {
 			continue
 		}
-		pct := float64(totalUsageBytes) / float64(totalLimitBytes) * 100
+		pct := float64(agg.usageBytes) / float64(agg.limitBytes) * 100
 		if pct >= 90 {
 			entries = append(entries, highMemEntry{
 				"deploy", dep.Name, pct,
-				formatBytesShort(totalUsageBytes),
-				formatBytesShort(totalLimitBytes),
+				formatBytesShort(agg.usageBytes),
+				formatBytesShort(agg.limitBytes),
 			})
 		}
 	}

@@ -65,8 +65,9 @@ func (e EventsModel) View() string {
 	reasonW := 20
 	objectW := 30
 	ageW := 8
-	cntW := 6
-	msgW := e.width - typeW - reasonW - objectW - ageW - cntW - 12
+	timeW := 14
+	cntW := 7
+	msgW := e.width - typeW - reasonW - objectW - ageW - timeW - cntW - 12
 	if msgW < 20 {
 		msgW = 20
 	}
@@ -74,6 +75,7 @@ func (e EventsModel) View() string {
 	header := lipgloss.JoinHorizontal(lipgloss.Top,
 		TableHeaderStyle.Width(typeW).Render("TYPE"),
 		TableHeaderStyle.Width(ageW).Render("AGE"),
+		TableHeaderStyle.Width(timeW).Render("TIME"),
 		TableHeaderStyle.Width(cntW).Render("COUNT"),
 		TableHeaderStyle.Width(reasonW).Render("REASON"),
 		TableHeaderStyle.Width(objectW).Render("OBJECT"),
@@ -95,9 +97,15 @@ func (e EventsModel) View() string {
 			typeStyle = typeStyle.Inherit(StyleRunning)
 		}
 
+		eventTime := "-"
+		if !evt.Timestamp.IsZero() {
+			eventTime = formatTimestamp(evt.Timestamp)
+		}
+
 		row := lipgloss.JoinHorizontal(lipgloss.Top,
 			typeStyle.Render(evt.Type),
 			TableCellStyle.Width(ageW).Render(formatDurationShort(evt.Age)),
+			TableCellStyle.Width(timeW).Render(truncate(eventTime, timeW-2)),
 			TableCellStyle.Width(cntW).Render(fmt.Sprintf("%d", evt.Count)),
 			TableCellStyle.Width(reasonW).Render(truncate(evt.Reason, reasonW-2)),
 			TableCellStyle.Width(objectW).Render(truncate(evt.Object, objectW-2)),

@@ -19,6 +19,7 @@ type DeploymentResourceStats struct {
 
 type DeploymentsModel struct {
 	deployments     []k8s.DeploymentInfo
+	filtered        []k8s.DeploymentInfo               // cached filter+sort result, rebuilt via refreshFiltered
 	resourceStats   map[string]DeploymentResourceStats // key: namespace/name
 	resourcesLoaded bool                               // true after first stats update
 	cursor          int
@@ -36,40 +37,54 @@ func NewDeploymentsModel(allNS bool) DeploymentsModel {
 	return DeploymentsModel{allNS: allNS}
 }
 
+// memAgg accumulates a deployment's pod memory usage and limits.
+type memAgg struct {
+	usageBytes int64
+	limitBytes int64
+}
+
+// aggregatePodMemory sums pod memory usage/limits per owning deployment in a
+// single pass over the pod list, keyed by "namespace/deployment". Grouping
+// here instead of scanning all pods once per deployment keeps the cost
+// O(pods + deployments) on large clusters.
+func aggregatePodMemory(pods []k8s.PodInfo, metrics map[string]k8s.PodMetrics) map[string]memAgg {
+	byDeploy := make(map[string]memAgg)
+	for _, pod := range pods {
+		if pod.Deployment == "" {
+			continue
+		}
+		key := pod.Namespace + "/" + pod.Deployment
+		agg := byDeploy[key]
+		agg.limitBytes += pod.Resources.MemLimitBytes
+		if m, ok := metrics[pod.Namespace+"/"+pod.Name]; ok {
+			agg.usageBytes += m.MemoryBytes
+		}
+		byDeploy[key] = agg
+	}
+	return byDeploy
+}
+
 func (d *DeploymentsModel) UpdateResourceStats(pods []k8s.PodInfo, metrics map[string]k8s.PodMetrics) {
 	stats := make(map[string]DeploymentResourceStats)
-	hasMetrics := metrics != nil && len(metrics) > 0
-	// Group pods by their owning deployment
+	hasMetrics := len(metrics) > 0
+	byDeploy := aggregatePodMemory(pods, metrics)
 	for _, dep := range d.deployments {
-		var totalUsageBytes, totalLimitBytes int64
-		for _, pod := range pods {
-			if pod.Namespace != dep.Namespace || pod.Deployment != dep.Name {
-				continue
-			}
-			// Memory limit from pod spec
-			totalLimitBytes += pod.Resources.MemLimitBytes
-			// Memory usage from metrics
-			if hasMetrics {
-				key := pod.Namespace + "/" + pod.Name
-				if m, ok := metrics[key]; ok {
-					totalUsageBytes += m.MemoryBytes
-				}
-			}
-		}
+		key := dep.Namespace + "/" + dep.Name
+		agg := byDeploy[key]
 
 		memUsage := ""
 		if !hasMetrics {
 			memUsage = "..."
-		} else if totalUsageBytes > 0 {
-			memUsage = formatBytesShort(totalUsageBytes)
+		} else if agg.usageBytes > 0 {
+			memUsage = formatBytesShort(agg.usageBytes)
 		}
 		memLimit := ""
-		if totalLimitBytes > 0 {
-			memLimit = formatBytesShort(totalLimitBytes)
+		if agg.limitBytes > 0 {
+			memLimit = formatBytesShort(agg.limitBytes)
 		}
 
 		if memUsage != "" || memLimit != "" {
-			stats[dep.Namespace+"/"+dep.Name] = DeploymentResourceStats{
+			stats[key] = DeploymentResourceStats{
 				MemUsage: memUsage,
 				MemLimit: memLimit,
 			}
@@ -81,8 +96,9 @@ func (d *DeploymentsModel) UpdateResourceStats(pods []k8s.PodInfo, metrics map[s
 
 func (d *DeploymentsModel) UpdateDeployments(deps []k8s.DeploymentInfo) {
 	d.deployments = deps
-	if d.cursor >= len(deps) {
-		d.cursor = max(0, len(deps)-1)
+	d.refreshFiltered()
+	if d.cursor >= len(d.filtered) {
+		d.cursor = max(0, len(d.filtered)-1)
 	}
 }
 
@@ -92,9 +108,8 @@ func (d *DeploymentsModel) SetSize(w, h int) {
 }
 
 func (d DeploymentsModel) SelectedDeployment() (k8s.DeploymentInfo, bool) {
-	filtered := d.filteredDeployments()
-	if d.cursor < len(filtered) {
-		return filtered[d.cursor], true
+	if d.cursor < len(d.filtered) {
+		return d.filtered[d.cursor], true
 	}
 	return k8s.DeploymentInfo{}, false
 }
@@ -107,10 +122,12 @@ func (d *DeploymentsModel) Update(msg tea.Msg) tea.Cmd {
 			case key.Matches(msg, Keys.Escape):
 				d.filtering = false
 				d.filter = ""
+				d.refreshFiltered()
 				return nil
 			case msg.Code == tea.KeyBackspace:
 				if len(d.filter) > 0 {
 					d.filter = d.filter[:len(d.filter)-1]
+					d.refreshFiltered()
 				}
 				return nil
 			case msg.Code == tea.KeyEnter:
@@ -121,6 +138,7 @@ func (d *DeploymentsModel) Update(msg tea.Msg) tea.Cmd {
 				// Allow arrow keys to navigate while filtering
 			case msg.Text != "":
 				d.filter += msg.Text
+				d.refreshFiltered()
 				d.cursor = 0
 				d.offset = 0
 				return nil
@@ -133,8 +151,6 @@ func (d *DeploymentsModel) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (d *DeploymentsModel) handleNav(msg tea.KeyPressMsg) {
-	filtered := d.filteredDeployments()
-
 	switch msg.String() {
 	case "up", "k":
 		if d.cursor > 0 {
@@ -144,7 +160,7 @@ func (d *DeploymentsModel) handleNav(msg tea.KeyPressMsg) {
 			}
 		}
 	case "down", "j":
-		if d.cursor < len(filtered)-1 {
+		if d.cursor < len(d.filtered)-1 {
 			d.cursor++
 			visibleRows := d.visibleRows()
 			if d.cursor >= d.offset+visibleRows {
@@ -154,16 +170,18 @@ func (d *DeploymentsModel) handleNav(msg tea.KeyPressMsg) {
 	case "esc":
 		if d.filter != "" {
 			d.filter = ""
+			d.refreshFiltered()
 			d.cursor = 0
 			d.offset = 0
 		}
 	case "/":
 		d.filtering = true
 		d.filter = ""
+		d.refreshFiltered()
 		d.cursor = 0
 		d.offset = 0
 	case "pgdown":
-		d.cursor = min(d.cursor+d.visibleRows(), len(filtered)-1)
+		d.cursor = max(min(d.cursor+d.visibleRows(), len(d.filtered)-1), 0)
 		if d.cursor >= d.offset+d.visibleRows() {
 			d.offset = d.cursor - d.visibleRows() + 1
 		}
@@ -176,17 +194,19 @@ func (d *DeploymentsModel) handleNav(msg tea.KeyPressMsg) {
 		cols := d.sortableColumns()
 		d.sortCol = (d.sortCol + 1) % len(cols)
 		d.sortAsc = true
+		d.refreshFiltered()
 		d.cursor = 0
 		d.offset = 0
 	case "S":
 		d.sortAsc = !d.sortAsc
+		d.refreshFiltered()
 		d.cursor = 0
 		d.offset = 0
 	}
 }
 
 func (d DeploymentsModel) View() string {
-	filtered := d.filteredDeployments()
+	filtered := d.filtered
 
 	if len(d.deployments) == 0 {
 		return lipgloss.NewStyle().
@@ -225,7 +245,7 @@ func (d DeploymentsModel) View() string {
 	end := min(d.offset+visibleRows, len(filtered))
 	for i := d.offset; i < end; i++ {
 		dep := filtered[i]
-		row := d.renderRow(dep, i == d.cursor)
+		row := d.renderRow(cols, dep, i == d.cursor)
 		b.WriteString(row + "\n")
 	}
 
@@ -237,9 +257,8 @@ func (d DeploymentsModel) View() string {
 	return lipgloss.NewStyle().Padding(0, 1).Render(b.String())
 }
 
-func (d DeploymentsModel) renderRow(dep k8s.DeploymentInfo, selected bool) string {
-	cols := d.columns()
-	values := d.rowValues(dep)
+func (d DeploymentsModel) renderRow(cols []column, dep k8s.DeploymentInfo, selected bool) string {
+	values := d.rowValues(cols, dep)
 
 	selectedStyle := lipgloss.NewStyle().
 		Background(colorPurple).
@@ -297,7 +316,7 @@ func (d DeploymentsModel) columns() []column {
 	return cols
 }
 
-func (d DeploymentsModel) rowValues(dep k8s.DeploymentInfo) []string {
+func (d DeploymentsModel) rowValues(cols []column, dep k8s.DeploymentInfo) []string {
 	vals := []string{}
 	if d.allNS {
 		vals = append(vals, truncate(dep.Namespace, 14))
@@ -313,7 +332,6 @@ func (d DeploymentsModel) rowValues(dep k8s.DeploymentInfo) []string {
 		}
 	}
 
-	cols := d.columns()
 	nameIdx := len(vals)
 
 	deployed := ""
@@ -346,7 +364,10 @@ func (d DeploymentsModel) activeSortCol() string {
 	return ""
 }
 
-func (d DeploymentsModel) filteredDeployments() []k8s.DeploymentInfo {
+// refreshFiltered rebuilds the cached filter+sort result. Must be called after
+// the deployment list, filter text, or sort order changes — View, navigation,
+// and selection all read the cache, so nothing re-sorts on every frame.
+func (d *DeploymentsModel) refreshFiltered() {
 	var result []k8s.DeploymentInfo
 	if d.filter == "" {
 		result = make([]k8s.DeploymentInfo, len(d.deployments))
@@ -384,7 +405,7 @@ func (d DeploymentsModel) filteredDeployments() []k8s.DeploymentInfo {
 		})
 	}
 
-	return result
+	d.filtered = result
 }
 
 func (d DeploymentsModel) visibleRows() int {

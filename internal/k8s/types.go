@@ -25,10 +25,10 @@ type ContainerInfo struct {
 	State          string
 	Restarts       int32
 	Image          string
-	CPUReq         string // e.g. "100m"
-	CPULim         string // e.g. "500m"
-	MemReq         string // e.g. "128Mi"
-	MemLim         string // e.g. "512Mi"
+	CPUReq         string    // e.g. "100m"
+	CPULim         string    // e.g. "500m"
+	MemReq         string    // e.g. "128Mi"
+	MemLim         string    // e.g. "512Mi"
 	LastTermReason string    // Last terminated reason (e.g. "OOMKilled")
 	LastTermCode   int32     // Last terminated exit code
 	LastTermAt     string    // When it was last terminated, relative ("5m ago")
@@ -83,6 +83,7 @@ type EventInfo struct {
 	Object    string
 	Message   string
 	Age       time.Duration
+	Timestamp time.Time // When the event last occurred, zero if unknown
 	Count     int32
 	Namespace string
 }
