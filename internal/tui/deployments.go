@@ -424,11 +424,11 @@ func formatBytesShort(b int64) string {
 	case b <= 0:
 		return ""
 	case b >= 1024*1024*1024:
-		return fmt.Sprintf("%.1fGi", float64(b)/(1024*1024*1024))
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(b)/(1024*1024*1024)), ".0") + "Gi"
 	case b >= 1024*1024:
-		return fmt.Sprintf("%dMi", b/(1024*1024))
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(b)/(1024*1024)), ".0") + "Mi"
 	case b >= 1024:
-		return fmt.Sprintf("%dKi", b/(1024))
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(b)/1024), ".0") + "Ki"
 	default:
 		return fmt.Sprintf("%dB", b)
 	}

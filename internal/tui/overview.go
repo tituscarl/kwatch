@@ -549,7 +549,7 @@ func (o OverviewModel) renderHighMemory() string {
 		if e.kind == "deploy" {
 			tag = tagStyle.Render("[deployment]")
 		}
-		pctStr := pctStyle.Render(fmt.Sprintf("%.0f%%", e.pct))
+		pctStr := pctStyle.Render(strings.TrimSuffix(fmt.Sprintf("%.1f", e.pct), ".0") + "%")
 		detail := detailStyle.Render(fmt.Sprintf("%s / %s", e.mem, e.lim))
 		lines = append(lines, "  "+pctStyle.Render("▲")+" "+tag+" "+nameStyle.Render(e.name)+"  "+pctStr+"  "+detail)
 	}

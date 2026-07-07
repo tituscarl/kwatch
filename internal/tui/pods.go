@@ -452,7 +452,7 @@ func memPctString(usageBytes, limitBytes int64) string {
 		return ""
 	}
 	pct := float64(usageBytes) / float64(limitBytes) * 100
-	return fmt.Sprintf("%.0f%%", pct)
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", pct), ".0") + "%"
 }
 
 // formatTimestamp renders an absolute local time, dropping the year when it's
