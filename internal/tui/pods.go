@@ -237,7 +237,7 @@ func (p PodsModel) renderRow(pod k8s.PodInfo, selected bool) string {
 					val = val + StyleWarning.Render(" CRASH!")
 				}
 				style = style.Inherit(StatusStyle(pod.Status))
-			} else if col.name == "MEM%" {
+			} else if col.name == "MEM PERCENTAGE" {
 				style = style.Inherit(memPctStyle(val))
 			}
 			parts = append(parts, style.Render(val))
@@ -264,12 +264,20 @@ func (p PodsModel) columns() []column {
 
 	metricsWidth := 0
 	if p.metricsAvail {
-		metricsWidth = 36 // CPU(9) + MEM(9) + MEM LIM(9) + MEM%(9)
+		metricsWidth = 45 // CPU(9) + MEM USAGE(11) + MEM LIM(9) + MEM PERCENTAGE(16)
 	}
 
-	nameWidth := p.width - 60 - metricsWidth
+	// Fixed columns (43) + cursor prefix (2) + outer padding (2).
+	maxNameWidth := p.width - 47 - metricsWidth
 	if p.allNS {
-		nameWidth -= 16
+		maxNameWidth -= 16
+	}
+
+	// Fit the column to the longest pod name instead of soaking up
+	// every spare terminal column.
+	nameWidth := p.longestPodName() + 2
+	if nameWidth > maxNameWidth {
+		nameWidth = maxNameWidth
 	}
 	if nameWidth < 20 {
 		nameWidth = 20
@@ -277,7 +285,7 @@ func (p PodsModel) columns() []column {
 
 	cols = append(cols,
 		column{"NAME", nameWidth},
-		column{"STATUS", 20},
+		column{"STATUS", 15},
 		column{"READY", 8},
 		column{"RESTARTS", 10},
 		column{"AGE", 10},
@@ -286,13 +294,23 @@ func (p PodsModel) columns() []column {
 	if p.metricsAvail {
 		cols = append(cols,
 			column{"CPU", 9},
-			column{"MEMORY", 9},
+			column{"MEM USAGE", 11},
 			column{"MEM LIM", 9},
-			column{"MEM%", 9},
+			column{"MEM PERCENTAGE", 16},
 		)
 	}
 
 	return cols
+}
+
+func (p PodsModel) longestPodName() int {
+	longest := 0
+	for _, pod := range p.pods {
+		if len(pod.Name) > longest {
+			longest = len(pod.Name)
+		}
+	}
+	return longest
 }
 
 func (p PodsModel) rowValues(pod k8s.PodInfo) []string {
