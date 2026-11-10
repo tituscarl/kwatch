@@ -118,7 +118,7 @@ kwatch --theme everforest
 
 ## Requirements
 
-- Go 1.25+ (to build from source)
+- Go 1.27+ (to build from source)
 - A valid kubeconfig with access to a Kubernetes cluster
 - `metrics-server` installed on the cluster for CPU/memory columns (optional — columns are hidden if unavailable)
 
