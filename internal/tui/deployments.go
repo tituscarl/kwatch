@@ -18,10 +18,12 @@ type DeploymentResourceStats struct {
 }
 
 type DeploymentsModel struct {
+	loaded          bool // false until the first fetch lands
 	deployments     []k8s.DeploymentInfo
 	filtered        []k8s.DeploymentInfo               // cached filter+sort result, rebuilt via refreshFiltered
 	resourceStats   map[string]DeploymentResourceStats // key: namespace/name
-	resourcesLoaded bool                               // true after first stats update
+	resourcesLoaded bool                               // true after first stats update (needs pods)
+	metricsLoaded   bool                               // true once usage metrics have arrived
 	cursor          int
 	offset          int
 	width           int
@@ -64,18 +66,15 @@ func aggregatePodMemory(pods []k8s.PodInfo, metrics map[string]k8s.PodMetrics) m
 	return byDeploy
 }
 
-func (d *DeploymentsModel) UpdateResourceStats(pods []k8s.PodInfo, metrics map[string]k8s.PodMetrics) {
+func (d *DeploymentsModel) UpdateResourceStats(pods []k8s.PodInfo, metrics map[string]k8s.PodMetrics, metricsLoaded bool) {
 	stats := make(map[string]DeploymentResourceStats)
-	hasMetrics := len(metrics) > 0
 	byDeploy := aggregatePodMemory(pods, metrics)
 	for _, dep := range d.deployments {
 		key := dep.Namespace + "/" + dep.Name
 		agg := byDeploy[key]
 
 		memUsage := ""
-		if !hasMetrics {
-			memUsage = "..."
-		} else if agg.usageBytes > 0 {
+		if agg.usageBytes > 0 {
 			memUsage = formatBytesShort(agg.usageBytes)
 		}
 		memLimit := ""
@@ -92,9 +91,11 @@ func (d *DeploymentsModel) UpdateResourceStats(pods []k8s.PodInfo, metrics map[s
 	}
 	d.resourceStats = stats
 	d.resourcesLoaded = true
+	d.metricsLoaded = metricsLoaded
 }
 
 func (d *DeploymentsModel) UpdateDeployments(deps []k8s.DeploymentInfo) {
+	d.loaded = true
 	d.deployments = deps
 	d.refreshFiltered()
 	if d.cursor >= len(d.filtered) {
@@ -208,6 +209,9 @@ func (d *DeploymentsModel) handleNav(msg tea.KeyPressMsg) {
 func (d DeploymentsModel) View() string {
 	filtered := d.filtered
 
+	if !d.loaded {
+		return loadingView("Loading deployments...")
+	}
 	if len(d.deployments) == 0 {
 		return lipgloss.NewStyle().
 			Foreground(colorDimText).
@@ -324,12 +328,16 @@ func (d DeploymentsModel) rowValues(cols []column, dep k8s.DeploymentInfo) []str
 
 	memUsage := ""
 	memLimit := ""
-	if d.resourceStats != nil {
-		key := dep.Namespace + "/" + dep.Name
-		if s, ok := d.resourceStats[key]; ok {
-			memUsage = s.MemUsage
-			memLimit = s.MemLimit
-		}
+	if s, ok := d.resourceStats[dep.Namespace+"/"+dep.Name]; ok {
+		memUsage = s.MemUsage
+		memLimit = s.MemLimit
+	}
+	// Both columns are aggregated from pods (limit) and metrics (usage),
+	// which land after the deployment list itself.
+	if !d.resourcesLoaded {
+		memUsage, memLimit = spinnerFrame, spinnerFrame
+	} else if !d.metricsLoaded {
+		memUsage = spinnerFrame
 	}
 
 	nameIdx := len(vals)

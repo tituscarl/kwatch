@@ -3,7 +3,7 @@ A terminal UI for monitoring Kubernetes services. Get instant visibility into po
 ![Go](https://img.shields.io/github/go-mod/go-version/tituscarl/kwatch)
 ![License](https://img.shields.io/badge/License-Apache%202.0-blue)
 
-> **Note:** kwatch currently only supports **Google Kubernetes Engine (GKE)** clusters. Support for other Kubernetes providers (EKS, AKS, etc.) is planned for future releases.
+> **Note:** kwatch is tested on **Google Kubernetes Engine (GKE)**. **Amazon EKS** works through the AWS CLI (v2 on your `PATH`); see [EKS](#eks).
 
 ## Features
 
@@ -90,12 +90,20 @@ kwatch --theme everforest
 | `G` | Jump to bottom |
 | `g` | Jump to top |
 | `PgUp` / `PgDn` | Page up / down |
+| `Enter` | View full line |
+| `/` | Grep logs (`n`/`N` next/prev match, `i` toggle case) |
+| `c` | Copy the highlighted line to the clipboard |
+| `t` | Cycle time window (off → 1h → 6h → 24h) |
+| Mouse drag | Select text and copy it on release |
 | `Esc` | Close log viewer |
 
 ### Log modes
 
 - **SNAPSHOT** — fetches last 200 lines, refreshes every tick interval
 - **FOLLOWING** — real-time log streaming, new lines appear instantly
+
+With a time window active (`t`), snapshot fetches pull everything logged in the
+past 1/6/24 hours (up to the 5000-line buffer) instead of the last 200 lines.
 
 ## Flags
 
@@ -106,7 +114,21 @@ kwatch --theme everforest
 | `--kubeconfig` | | `~/.kube/config` | Path to kubeconfig file |
 | `--context` | | | Kubernetes context to use |
 | `--refresh` | | `5` | Refresh interval in seconds |
+| `--aws-profile` | | | AWS CLI profile for EKS authentication |
 | `--theme` | | `github-dark` | Color theme |
+
+## EKS
+
+Add the cluster to your kubeconfig with the AWS CLI, then point kwatch at it:
+
+```bash
+aws eks update-kubeconfig --name my-cluster --region us-east-1 --profile my-profile
+kwatch --context arn:aws:eks:us-east-1:123456789012:cluster/my-cluster
+```
+
+`--aws-profile` swaps the profile without regenerating the kubeconfig
+(`AWS_PROFILE=other kwatch` works too, unless the kubeconfig pins a profile).
+For SSO profiles, run `aws sso login --profile my-profile` first.
 
 ## Themes
 

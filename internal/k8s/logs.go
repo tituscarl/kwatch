@@ -20,11 +20,15 @@ type logEntry struct {
 }
 
 // GetPodLogs fetches the last N lines of logs for a pod container (read-only).
-func (c *Client) GetPodLogs(namespace, podName, container string, tailLines int64) (string, error) {
+// sinceSeconds > 0 limits the fetch to that time window.
+func (c *Client) GetPodLogs(namespace, podName, container string, tailLines, sinceSeconds int64) (string, error) {
 	opts := &corev1.PodLogOptions{
 		TailLines:  &tailLines,
 		Container:  container,
 		Timestamps: true,
+	}
+	if sinceSeconds > 0 {
+		opts.SinceSeconds = &sinceSeconds
 	}
 
 	ctx, cancel := c.reqCtx()
@@ -96,7 +100,8 @@ func (c *Client) FollowPodLogs(ctx context.Context, namespace, podName, containe
 const maxConcurrentLogStreams = 10
 
 // GetMultiPodLogs fetches logs from multiple pods with limited concurrency, merges by timestamp.
-func (c *Client) GetMultiPodLogs(namespace string, pods []PodInfo, tailLines int64) (string, error) {
+// sinceSeconds > 0 limits each pod's fetch to that time window.
+func (c *Client) GetMultiPodLogs(namespace string, pods []PodInfo, tailLines, sinceSeconds int64) (string, error) {
 	if len(pods) == 0 {
 		return "", nil
 	}
@@ -128,6 +133,9 @@ func (c *Client) GetMultiPodLogs(namespace string, pods []PodInfo, tailLines int
 				TailLines:  &perPod,
 				Container:  container,
 				Timestamps: true,
+			}
+			if sinceSeconds > 0 {
+				opts.SinceSeconds = &sinceSeconds
 			}
 
 			ctx, cancel := c.reqCtx()

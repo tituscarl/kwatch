@@ -84,6 +84,8 @@ func (d LineDetailModel) Update(msg tea.Msg) (LineDetailModel, tea.Cmd) {
 			d.offset = 0
 		case "G":
 			d.offset = maxOff
+		case "c":
+			return d, tea.SetClipboard(d.content)
 		}
 	}
 	return d, nil
@@ -98,7 +100,8 @@ func (d LineDetailModel) View() string {
 	descStyle := lipgloss.NewStyle().Foreground(colorDimText)
 	helpBar := keyStyle.Render("esc") + descStyle.Render(" close") + sep +
 		keyStyle.Render("j/k") + descStyle.Render(" scroll") + sep +
-		keyStyle.Render("g/G") + descStyle.Render(" top/bottom")
+		keyStyle.Render("g/G") + descStyle.Render(" top/bottom") + sep +
+		keyStyle.Render("c") + descStyle.Render(" copy")
 
 	visible := d.visibleLines()
 	end := min(d.offset+visible, len(d.wrappedLines))

@@ -25,18 +25,19 @@ const (
 )
 
 type LogsModel struct {
-	podName   string
-	namespace string
-	container string
-	lines     []string
-	severity  []logSeverity // parallel to lines; cached highlight class
-	offset    int
-	width     int
-	height    int
-	err       error
-	following bool
-	atBottom  bool // track if user is at the bottom
-	cursor    int  // selected line index (into l.lines in normal mode; mirrors matchCursor in filter mode)
+	podName    string
+	namespace  string
+	container  string
+	lines      []string
+	severity   []logSeverity // parallel to lines; cached highlight class
+	offset     int
+	width      int
+	height     int
+	err        error
+	following  bool
+	atBottom   bool // track if user is at the bottom
+	cursor     int  // selected line index (into l.lines in normal mode; mirrors matchCursor in filter mode)
+	sinceHours int  // time window for fetches; 0 = plain tail
 
 	// Multi-pod
 	multiPod bool
@@ -51,6 +52,14 @@ type LogsModel struct {
 	filterCaseSense bool           // true = case-sensitive
 	matchLines      []int          // indices of matching lines in l.lines
 	matchCursor     int            // current position in matchLines for n/N
+
+	// Mouse drag selection (display-line indices + row-relative columns;
+	// anchor -1 = none)
+	selAnchor    int
+	selAnchorCol int
+	selEnd       int
+	selEndCol    int
+	selDragged   bool
 }
 
 // Messages
@@ -73,7 +82,7 @@ type LogStreamEndedMsg struct {
 }
 
 func NewLogsModel() LogsModel {
-	return LogsModel{}
+	return LogsModel{selAnchor: -1}
 }
 
 func (l *LogsModel) Show(podName, namespace, container string) {
@@ -97,6 +106,8 @@ func (l *LogsModel) Show(podName, namespace, container string) {
 	l.filterCaseSense = false
 	l.matchLines = nil
 	l.matchCursor = 0
+	l.selAnchor = -1
+	l.sinceHours = 0
 }
 
 func (l *LogsModel) ShowMultiPod(deploymentName, namespace string, podCount int) {
@@ -120,6 +131,8 @@ func (l *LogsModel) ShowMultiPod(deploymentName, namespace string, podCount int)
 	l.filterCaseSense = false
 	l.matchLines = nil
 	l.matchCursor = 0
+	l.selAnchor = -1
+	l.sinceHours = 0
 }
 
 // SelectedLine returns the currently highlighted log line, its 1-based line
@@ -144,6 +157,142 @@ func (l LogsModel) SelectedLine() (text string, lineNum int, podTag string, ok b
 		}
 	}
 	return line, idx + 1, "", true
+}
+
+// logChromeRows is how many rows sit above the first log line inside View's
+// output: leading blank, title, box border, box padding. logChromeCols is the
+// columns left of each row: box border + padding. Keep in sync with View.
+const (
+	logChromeRows = 4
+	logChromeCols = 3
+)
+
+// displayLine returns the line shown at display index i (resolves through
+// matchLines when a filter is active).
+func (l LogsModel) displayLine(i int) string {
+	if l.filterTerm != "" {
+		return l.lines[l.matchLines[i]]
+	}
+	return l.lines[i]
+}
+
+// gutterCols is the width of the cursor marker + line-number gutter, i.e. the
+// row column where log text begins. Keep in sync with View.
+func (l LogsModel) gutterCols() int {
+	return len(fmt.Sprintf("%d", len(l.lines))) + 3
+}
+
+func (l LogsModel) innerWidth() int {
+	w := l.width - 12
+	if w < 10 {
+		w = 10
+	}
+	return w
+}
+
+// selCol converts a screen x into a row-relative column, clamped to the row.
+func (l LogsModel) selCol(x int) int {
+	return min(max(x-logChromeCols, 0), l.innerWidth()-1)
+}
+
+// StartSelect anchors a drag selection at screen x / view-relative y and
+// moves the cursor to that line.
+func (l *LogsModel) StartSelect(x, y int) {
+	l.selAnchor = -1
+	l.selDragged = false
+	row := y - logChromeRows
+	if row < 0 || row >= l.visibleLines() {
+		return
+	}
+	idx := l.offset + row
+	if idx >= l.displayLineCount() {
+		return
+	}
+	l.selAnchor = idx
+	l.selEnd = idx
+	l.selAnchorCol = l.selCol(x)
+	l.selEndCol = l.selAnchorCol
+	if l.filterTerm != "" {
+		l.matchCursor = idx
+	} else {
+		l.cursor = idx
+	}
+}
+
+// DragSelect extends the selection to the cell under the mouse, clamped to
+// the visible window.
+func (l *LogsModel) DragSelect(x, y int) {
+	if l.selAnchor == -1 {
+		return
+	}
+	l.selDragged = true
+	row := min(max(y-logChromeRows, 0), l.visibleLines()-1)
+	l.selEnd = min(l.offset+row, max(l.displayLineCount()-1, 0))
+	l.selEndCol = l.selCol(x)
+}
+
+// normalizedSel returns the selection endpoints ordered top-left to
+// bottom-right.
+func (l LogsModel) normalizedSel() (sl, sc, el, ec int) {
+	sl, sc, el, ec = l.selAnchor, l.selAnchorCol, l.selEnd, l.selEndCol
+	if sl > el || (sl == el && sc > ec) {
+		sl, el = el, sl
+		sc, ec = ec, sc
+	}
+	return
+}
+
+// EndSelect finishes a drag and returns the selected text: partial first and
+// last lines, full lines in between, like a terminal's stream selection. A
+// click without movement just moves the cursor and returns ok=false.
+func (l *LogsModel) EndSelect() (string, bool) {
+	sl, sc, el, ec := l.normalizedSel()
+	anchored, dragged := l.selAnchor != -1, l.selDragged
+	l.selAnchor = -1
+	l.selDragged = false
+	if !anchored || !dragged {
+		return "", false
+	}
+	textStart := l.gutterCols()
+	sel := make([]string, 0, el-sl+1)
+	for i := sl; i <= el; i++ {
+		text := l.displayLine(i)
+		from, to := 0, ansi.StringWidth(text)
+		if i == sl {
+			from = max(sc-textStart, 0)
+		}
+		if i == el {
+			to = max(ec-textStart+1, from)
+		}
+		// Cell offsets → byte offsets (Truncate caps at the string end)
+		b1 := len(ansi.Truncate(text, from, ""))
+		b2 := len(ansi.Truncate(text, to, ""))
+		sel = append(sel, text[b1:b2])
+	}
+	return strings.Join(sel, "\n"), true
+}
+
+func (l LogsModel) inSelection(i int) bool {
+	if l.selAnchor == -1 {
+		return false
+	}
+	sl, _, el, _ := l.normalizedSel()
+	return i >= sl && i <= el
+}
+
+// selRowRange returns the highlighted column span for display row i. First
+// and last rows start/stop at the drag columns; rows in between get the full
+// width.
+func (l LogsModel) selRowRange(i, width int) (int, int) {
+	sl, sc, el, ec := l.normalizedSel()
+	from, to := 0, width
+	if i == sl {
+		from = min(max(sc, l.gutterCols()), width)
+	}
+	if i == el {
+		to = min(max(ec+1, from), width)
+	}
+	return from, to
 }
 
 // HasActiveFilter returns true if the log viewer has a search filter active or being typed.
@@ -179,6 +328,7 @@ func (l *LogsModel) compileFilter() {
 }
 
 func (l *LogsModel) refilter() {
+	l.selAnchor = -1
 	if l.filterTerm == "" {
 		l.matchLines = nil
 		l.filterRegex = nil
@@ -202,6 +352,10 @@ func (l *LogsModel) refilter() {
 
 func (l *LogsModel) UpdateLogs(content string, err error) {
 	l.loading = false
+	// Don't yank lines out from under a drag; the next tick refetches anyway
+	if l.selAnchor != -1 && err == nil {
+		return
+	}
 	if err != nil {
 		l.err = err
 		l.lines = nil
@@ -242,6 +396,7 @@ func (l *LogsModel) AppendLines(lines []string) {
 	}
 	// Cap total lines to prevent unbounded memory growth.
 	trimmed := 0
+	shown := l.displayLineCount()
 	if len(l.lines) > maxLogLines {
 		trimmed = len(l.lines) - maxLogLines
 		l.lines = l.lines[trimmed:]
@@ -254,8 +409,21 @@ func (l *LogsModel) AppendLines(lines []string) {
 	if l.filterTerm == "" && trimmed > 0 {
 		l.cursor = max(l.cursor-trimmed, 0)
 	}
-	// Auto-scroll if at bottom
-	if l.atBottom {
+	selecting := l.selAnchor != -1
+	if selecting {
+		// Keep the selection (and the rows under the mouse) pinned to the
+		// same text while the trim shifts indices up.
+		if shift := shown - l.displayLineCount(); shift > 0 {
+			l.offset = max(l.offset-shift, 0)
+			l.selAnchor -= shift
+			l.selEnd = max(l.selEnd-shift, 0)
+			if l.selAnchor < 0 {
+				l.selAnchor = -1 // anchor line fell out of the buffer
+			}
+		}
+	}
+	// Auto-scroll if at bottom, but hold still while the user is dragging
+	if l.atBottom && !selecting {
 		l.offset = l.maxOffset()
 		l.cursor = max(l.displayLineCount()-1, 0)
 	} else if l.cursor >= l.displayLineCount() {
@@ -301,6 +469,9 @@ func (l LogsModel) displayLineCount() int {
 }
 
 func (l LogsModel) Update(msg tea.KeyPressMsg) LogsModel {
+	// A release outside the terminal never reaches us; any key drops the
+	// stale selection so refreshes and auto-scroll resume.
+	l.selAnchor = -1
 	// Handle filter input mode
 	if l.filtering {
 		switch {
@@ -442,6 +613,22 @@ func (l LogsModel) Update(msg tea.KeyPressMsg) LogsModel {
 			l.offset = l.maxOffset()
 			l.cursor = max(l.displayLineCount()-1, 0)
 		}
+	case "t":
+		// Cycle the time window; the app refetches when this changes.
+		// The follow stream doesn't use it, so leave it alone while following.
+		if l.following {
+			break
+		}
+		switch l.sinceHours {
+		case 0:
+			l.sinceHours = 1
+		case 1:
+			l.sinceHours = 6
+		case 6:
+			l.sinceHours = 24
+		default:
+			l.sinceHours = 0
+		}
 	}
 	return l
 }
@@ -452,11 +639,15 @@ func (l LogsModel) View() string {
 		Foreground(colorPurple).
 		Padding(0, 1)
 
+	window := ""
+	if l.sinceHours > 0 && !l.following {
+		window = fmt.Sprintf(" · last %dh", l.sinceHours)
+	}
 	var title string
 	if l.multiPod {
-		title = titleStyle.Render(fmt.Sprintf("Logs: %s (all %d pods)", l.podName, l.podCount))
+		title = titleStyle.Render(fmt.Sprintf("Logs: %s (all %d pods)%s", l.podName, l.podCount, window))
 	} else {
-		title = titleStyle.Render(fmt.Sprintf("Logs: %s/%s", l.podName, l.container))
+		title = titleStyle.Render(fmt.Sprintf("Logs: %s/%s%s", l.podName, l.container, window))
 	}
 
 	// Mode badge
@@ -487,6 +678,8 @@ func (l LogsModel) View() string {
 		keyStyle.Render("j/k") + descStyle.Render(" scroll") + sep +
 		keyStyle.Render("G") + descStyle.Render(" bottom") + sep +
 		keyStyle.Render("g") + descStyle.Render(" top") + sep +
+		keyStyle.Render("c") + descStyle.Render(" copy") + sep +
+		keyStyle.Render("t") + descStyle.Render(" window") + sep +
 		keyStyle.Render("/") + descStyle.Render(" grep")
 
 	if l.filterTerm != "" {
@@ -532,9 +725,9 @@ func (l LogsModel) View() string {
 		var msg string
 		if l.loading {
 			if l.multiPod {
-				msg = fmt.Sprintf("  Loading logs from %d pods...", l.podCount)
+				msg = fmt.Sprintf("  %s Loading logs from %d pods...", spinnerFrame, l.podCount)
 			} else {
-				msg = "  Loading logs..."
+				msg = "  " + spinnerFrame + " Loading logs..."
 			}
 		} else {
 			msg = "  No logs available"
@@ -552,10 +745,7 @@ func (l LogsModel) View() string {
 
 	// Truncation width: outer box width minus border (2) and padding (4).
 	// Long lines would otherwise wrap and push the bottom bar off-screen.
-	innerWidth := l.width - 12
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
+	innerWidth := l.innerWidth()
 
 	var scrollInfo string
 
@@ -587,7 +777,13 @@ func (l LogsModel) View() string {
 				} else {
 					row = " " + lineNum + " " + styled
 				}
-				b.WriteString(ansi.Truncate(row, innerWidth, "") + "\n")
+				selFrom, selTo := 0, 0
+				if l.inSelection(i) {
+					selFrom, selTo = l.selRowRange(i, innerWidth)
+				} else if i == l.matchCursor {
+					selTo = innerWidth
+				}
+				b.WriteString(renderLogRow(row, innerWidth, selFrom, selTo) + "\n")
 			}
 
 			scrollInfo = lipgloss.NewStyle().Foreground(colorDimText).Render(
@@ -615,7 +811,13 @@ func (l LogsModel) View() string {
 			} else {
 				row = " " + lineNum + " " + styled
 			}
-			b.WriteString(ansi.Truncate(row, innerWidth, "") + "\n")
+			selFrom, selTo := 0, 0
+			if l.inSelection(i) {
+				selFrom, selTo = l.selRowRange(i, innerWidth)
+			} else if i == l.cursor {
+				selTo = innerWidth
+			}
+			b.WriteString(renderLogRow(row, innerWidth, selFrom, selTo) + "\n")
 		}
 
 		scrollInfo = lipgloss.NewStyle().Foreground(colorDimText).Render(
@@ -672,6 +874,31 @@ func containsAny(s string, subs []string) bool {
 		}
 	}
 	return false
+}
+
+// paintBg lays a background bar under an already-styled string. The inline
+// SGR resets would punch holes in a wrapped background, so the bar is
+// re-applied after every reset instead.
+func paintBg(s string) string {
+	bg := ansi.Style{}.BackgroundColor(colorSubtle).String()
+	return bg + strings.ReplaceAll(s, "\x1b[m", "\x1b[m"+bg) + "\x1b[m"
+}
+
+// renderLogRow truncates a row to width and paints a background over the
+// [selFrom, selTo) column span — pass (0, width) for a full bar, or an empty
+// span for none.
+func renderLogRow(row string, width, selFrom, selTo int) string {
+	row = ansi.Truncate(row, width, "")
+	if selFrom >= selTo {
+		return row
+	}
+	if pad := width - ansi.StringWidth(row); pad > 0 {
+		row += strings.Repeat(" ", pad)
+	}
+	if selFrom <= 0 && selTo >= width {
+		return paintBg(row)
+	}
+	return ansi.Cut(row, 0, selFrom) + paintBg(ansi.Cut(row, selFrom, selTo)) + ansi.Cut(row, selTo, width)
 }
 
 // severityStyle maps a cached severity to its display style, falling back to

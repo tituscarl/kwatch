@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/tituscarl/kwatch/internal/k8s"
@@ -57,9 +58,13 @@ type App struct {
 	multiPodLog  bool
 	multiPodPods []k8s.PodInfo
 
-	width  int
-	height int
-	err    error
+	width      int
+	height     int
+	contentTop int // screen row where the content area starts; set in View
+	err        error
+
+	spinner  spinner.Model
+	spinning bool // a spinner tick chain is in flight
 }
 
 func NewApp(client *k8s.Client, namespace string, allNS bool, refresh time.Duration, version string) *App {
@@ -80,11 +85,14 @@ func NewApp(client *k8s.Client, namespace string, allNS bool, refresh time.Durat
 		logs:            NewLogsModel(),
 		lineDetail:      NewLineDetailModel(),
 		podPicker:       NewPodPickerModel(),
+		spinner:         spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
 }
 
 func (a *App) Init() tea.Cmd {
+	a.spinning = true
 	return tea.Batch(
+		a.spinner.Tick,
 		a.fetchPods(),
 		a.fetchDeployments(),
 		a.fetchEvents(),
@@ -94,6 +102,49 @@ func (a *App) Init() tea.Cmd {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Animate only while something is loading; once nothing is, drop the
+	// tick so an idle dashboard doesn't redraw 10x a second.
+	if tick, ok := msg.(spinner.TickMsg); ok {
+		if !a.isLoading() {
+			a.spinning = false
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.spinner, cmd = a.spinner.Update(tick)
+		spinnerFrame = a.spinner.View()
+		return a, cmd
+	}
+
+	m, cmd := a.update(msg)
+	// This message may have started a load (logs opened, pod picker
+	// shown); restart the spinner if it went idle.
+	if !a.spinning && a.isLoading() {
+		a.spinning = true
+		cmd = tea.Batch(cmd, a.spinner.Tick)
+	}
+	return m, cmd
+}
+
+// isLoading reports whether any visible view is waiting on its first data.
+func (a *App) isLoading() bool {
+	return !a.overview.loaded || !a.pods.loaded || !a.deployments.loaded || !a.events.loaded ||
+		!a.pods.metricsLoaded ||
+		(a.showLogs && a.logs.loading) ||
+		(a.showPodPicker && a.podPicker.loading)
+}
+
+// spinnerFrame is the current spinner glyph, shared by every loading view.
+// Bubble Tea runs Update and View on one goroutine, so a plain var is safe.
+var spinnerFrame = spinner.MiniDot.Frames[0]
+
+// loadingView is the placeholder a tab shows before its first fetch lands.
+func loadingView(text string) string {
+	return lipgloss.NewStyle().Padding(2, 4).Render(
+		lipgloss.NewStyle().Foreground(colorPurple).Render(spinnerFrame) + " " +
+			lipgloss.NewStyle().Foreground(colorDimText).Render(text))
+}
+
+func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -127,6 +178,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i := 0; i < wheelLines; i++ {
 			if cmd := a.scrollFocused(k); cmd != nil {
 				cmds = append(cmds, cmd)
+			}
+		}
+
+	// Drag over the logs view selects text; releasing copies it.
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft && a.showLogs && !a.showLineDetail {
+			a.logs.StartSelect(msg.X, msg.Y-a.contentTop)
+		}
+
+	case tea.MouseMotionMsg:
+		if a.showLogs && !a.showLineDetail {
+			a.logs.DragSelect(msg.X, msg.Y-a.contentTop)
+		}
+
+	case tea.MouseReleaseMsg:
+		if a.showLogs && !a.showLineDetail {
+			if text, ok := a.logs.EndSelect(); ok {
+				return a, tea.SetClipboard(text)
 			}
 		}
 
@@ -174,8 +243,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.showLineDetail = false
 				return a, nil
 			}
-			a.lineDetail, _ = a.lineDetail.Update(msg)
-			return a, nil
+			var cmd tea.Cmd
+			a.lineDetail, cmd = a.lineDetail.Update(msg)
+			return a, cmd
 		}
 
 		// If logs view is open, handle keys
@@ -201,7 +271,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return a, nil
 			}
+			// c copies the highlighted line via OSC 52, so it works over ssh too
+			if msg.String() == "c" && !a.logs.filtering {
+				if text, _, _, ok := a.logs.SelectedLine(); ok {
+					return a, tea.SetClipboard(text)
+				}
+				return a, nil
+			}
 			prevFollowing := a.logs.following
+			prevSince := a.logs.sinceHours
 			a.logs = a.logs.Update(msg)
 			// Handle follow mode toggle
 			if a.logs.following != prevFollowing {
@@ -209,6 +287,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return a, a.startFollowing()
 				}
 				a.stopFollowing()
+			}
+			// Time window changed — refetch with the new bounds
+			if a.logs.sinceHours != prevSince {
+				return a, a.fetchLogs()
 			}
 			return a, nil
 		}
@@ -258,13 +340,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PodsUpdatedMsg:
 		a.pods.UpdatePods(msg.Pods)
 		a.overview.UpdatePods(msg.Pods)
-		a.deployments.UpdateResourceStats(msg.Pods, a.pods.metrics)
+		a.deployments.UpdateResourceStats(msg.Pods, a.pods.metrics, a.pods.metricsLoaded)
 		a.statusbar.lastRefresh = time.Now()
 		a.statusbar.err = nil
 
 	case DeploymentsUpdatedMsg:
 		a.deployments.UpdateDeployments(msg.Deployments)
 		a.overview.UpdateDeployments(msg.Deployments)
+		// Stats are keyed per deployment; rebuild them if pods got here first
+		if a.pods.loaded {
+			a.deployments.UpdateResourceStats(a.pods.pods, a.pods.metrics, a.pods.metricsLoaded)
+		}
 
 	case EventsUpdatedMsg:
 		a.events.UpdateEvents(msg.Events)
@@ -272,7 +358,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MetricsUpdatedMsg:
 		a.pods.UpdateMetrics(msg.Metrics)
-		a.deployments.UpdateResourceStats(a.pods.pods, msg.Metrics)
+		a.deployments.UpdateResourceStats(a.pods.pods, msg.Metrics, true)
 		a.overview.UpdateMetrics(msg.Metrics)
 
 	case DeploymentPodsMsg:
@@ -328,7 +414,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *App) View() tea.View {
 	if a.width == 0 {
-		v := tea.NewView("Loading...")
+		v := tea.NewView(spinnerFrame + " Loading...")
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		return v
@@ -373,6 +459,10 @@ func (a *App) View() tea.View {
 		BorderForeground(colorSubtle).
 		Width(a.width).
 		Render("")
+
+	// Screen row where the content area begins — mouse handlers use this to
+	// translate absolute coordinates into view-relative ones.
+	a.contentTop = lipgloss.Height(header) + lipgloss.Height(separator) + lipgloss.Height(tabs)
 
 	result := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -437,12 +527,12 @@ func (a *App) handleEnter() tea.Cmd {
 	switch a.activeTab {
 	case tabPods:
 		if pod, ok := a.pods.SelectedPod(); ok {
-			a.detail.ShowPod(pod)
+			a.detail.ShowPod(pod, a.pods.metrics)
 			a.showDetail = true
 		}
 	case tabDeployments:
 		if dep, ok := a.deployments.SelectedDeployment(); ok {
-			a.detail.ShowDeployment(dep)
+			a.detail.ShowDeployment(dep, a.pods.pods, a.pods.metrics)
 			a.showDetail = true
 		}
 	}
@@ -562,11 +652,18 @@ func (a *App) stopFollowing() {
 }
 
 func (a *App) fetchLogs() tea.Cmd {
+	since := int64(a.logs.sinceHours) * 3600
+	// With a time window, tail up to the viewer's buffer cap instead of the
+	// usual 200 so the window isn't silently cut short.
+	tail := int64(200)
+	if since > 0 {
+		tail = maxLogLines
+	}
 	if a.multiPodLog {
 		pods := a.multiPodPods
 		namespace := a.logs.namespace
 		return func() tea.Msg {
-			content, err := a.client.GetMultiPodLogs(namespace, pods, 200)
+			content, err := a.client.GetMultiPodLogs(namespace, pods, tail, since)
 			return LogsUpdatedMsg{Content: content, Err: err}
 		}
 	}
@@ -574,7 +671,7 @@ func (a *App) fetchLogs() tea.Cmd {
 	namespace := a.logs.namespace
 	container := a.logs.container
 	return func() tea.Msg {
-		content, err := a.client.GetPodLogs(namespace, podName, container, 200)
+		content, err := a.client.GetPodLogs(namespace, podName, container, tail, since)
 		return LogsUpdatedMsg{Content: content, Err: err}
 	}
 }

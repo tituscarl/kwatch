@@ -10,6 +10,7 @@ import (
 )
 
 type EventsModel struct {
+	loaded bool // false until the first fetch lands
 	events []k8s.EventInfo
 	offset int
 	width  int
@@ -21,6 +22,7 @@ func NewEventsModel() EventsModel {
 }
 
 func (e *EventsModel) UpdateEvents(events []k8s.EventInfo) {
+	e.loaded = true
 	e.events = events
 }
 
@@ -51,6 +53,9 @@ func (e *EventsModel) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (e EventsModel) View() string {
+	if !e.loaded {
+		return loadingView("Loading events...")
+	}
 	if len(e.events) == 0 {
 		return lipgloss.NewStyle().
 			Foreground(colorDimText).
