@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -12,7 +13,9 @@ import (
 	// plugins (gke-gcloud-auth-plugin, aws eks get-token, kubelogin) work
 	// without this.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
@@ -42,7 +45,9 @@ type ClusterInfo struct {
 	ServerURL   string
 }
 
-func NewClient(kubeconfig, kubeContext string) (*Client, error) {
+// NewClient builds a read-only client for the given kubeconfig context.
+// awsProfile, when set, picks the AWS CLI profile used to fetch EKS tokens.
+func NewClient(kubeconfig, kubeContext, awsProfile string) (*Client, error) {
 	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 	overrides := &clientcmd.ConfigOverrides{}
 	if kubeContext != "" {
@@ -78,6 +83,9 @@ func NewClient(kubeconfig, kubeContext string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rest config: %w", err)
 	}
+	if err := applyAWSProfile(restConfig, awsProfile); err != nil {
+		return nil, err
+	}
 
 	// Raise rate limits for multi-pod log streaming (default is 5 QPS / burst 10).
 	// This is a read-only tool, so higher QPS is safe.
@@ -107,6 +115,38 @@ func NewClient(kubeconfig, kubeContext string) (*Client, error) {
 	c.metricsAvail = c.probeMetrics()
 
 	return c, nil
+}
+
+// applyAWSProfile points the kubeconfig's exec credential plugin (aws eks
+// get-token, aws-iam-authenticator) at the given AWS CLI profile. It wins
+// over any profile the kubeconfig already pins, whether through an env entry
+// or a --profile arg.
+func applyAWSProfile(cfg *rest.Config, profile string) error {
+	if profile == "" {
+		return nil
+	}
+	if cfg.ExecProvider == nil {
+		return fmt.Errorf("--aws-profile needs a kubeconfig context that authenticates via an exec plugin (e.g. from `aws eks update-kubeconfig`)")
+	}
+	args := cfg.ExecProvider.Args
+	hasFlag := false
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--profile" {
+			args[i+1] = profile
+			hasFlag = true
+		}
+	}
+	// The aws CLI ranks AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY above
+	// AWS_PROFILE, so static keys in the shell would silently win over the
+	// env var. Only the --profile flag beats them.
+	if !hasFlag && filepath.Base(cfg.ExecProvider.Command) == "aws" {
+		cfg.ExecProvider.Args = append(args, "--profile", profile)
+	}
+	// Still set the env var for other plugins (aws-iam-authenticator).
+	// client-go appends these after os.Environ() and exec keeps the last
+	// duplicate, so appending is enough to override.
+	cfg.ExecProvider.Env = append(cfg.ExecProvider.Env, clientcmdapi.ExecEnvVar{Name: "AWS_PROFILE", Value: profile})
+	return nil
 }
 
 func (c *Client) probeMetrics() bool {
