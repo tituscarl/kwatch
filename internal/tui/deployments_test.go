@@ -36,7 +36,7 @@ func TestUpdateResourceStats(t *testing.T) {
 
 	d := NewDeploymentsModel(false)
 	d.UpdateDeployments(deps)
-	d.UpdateResourceStats(pods, metrics)
+	d.UpdateResourceStats(pods, metrics, true)
 
 	want := map[string]DeploymentResourceStats{
 		"ns1/a": {MemUsage: "50Mi", MemLimit: "200Mi"},
@@ -49,21 +49,30 @@ func TestUpdateResourceStats(t *testing.T) {
 	}
 }
 
-func TestUpdateResourceStatsNoMetrics(t *testing.T) {
+// MEM shows the spinner until metrics land; MEM LIM only needs pods. With
+// metrics unavailable (nil map), MEM ends up blank instead of spinning forever.
+func TestDeploymentMemColumnsWhileLoading(t *testing.T) {
 	deps, pods, _ := statsFixture()
 
 	d := NewDeploymentsModel(false)
 	d.UpdateDeployments(deps)
-	d.UpdateResourceStats(pods, nil)
-
-	// Without metrics every deployment shows a usage placeholder
-	want := map[string]DeploymentResourceStats{
-		"ns1/a": {MemUsage: "...", MemLimit: "200Mi"},
-		"ns1/b": {MemUsage: "..."},
-		"ns1/c": {MemUsage: "..."},
-		"ns2/a": {MemUsage: "...", MemLimit: "100Mi"},
+	cols := d.columns()
+	memAt := func() (usage, limit string) {
+		v := d.rowValues(cols, deps[0]) // ns1/a: NAME READY UP AVAIL MEM MEMLIM ...
+		return v[4], v[5]
 	}
-	if !reflect.DeepEqual(d.resourceStats, want) {
-		t.Errorf("stats mismatch:\n got %v\nwant %v", d.resourceStats, want)
+
+	if u, l := memAt(); u != spinnerFrame || l != spinnerFrame {
+		t.Errorf("before pods: got %q/%q, want spinners", u, l)
+	}
+
+	d.UpdateResourceStats(pods, nil, false)
+	if u, l := memAt(); u != spinnerFrame || l != "200Mi" {
+		t.Errorf("pods only: got %q/%q, want spinner/200Mi", u, l)
+	}
+
+	d.UpdateResourceStats(pods, nil, true)
+	if u, l := memAt(); u != "" || l != "200Mi" {
+		t.Errorf("metrics unavailable: got %q/%q, want \"\"/200Mi", u, l)
 	}
 }

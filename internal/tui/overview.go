@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/tituscarl/kwatch/internal/k8s"
 )
 
@@ -16,6 +17,7 @@ type OverviewModel struct {
 	events       []k8s.EventInfo
 	metrics      map[string]k8s.PodMetrics
 	metricsAvail bool
+	loaded       bool // pods have arrived at least once
 	width        int
 	height       int
 }
@@ -25,6 +27,7 @@ func NewOverviewModel(metricsAvail bool) OverviewModel {
 }
 
 func (o *OverviewModel) UpdatePods(pods []k8s.PodInfo) {
+	o.loaded = true
 	o.pods = pods
 }
 
@@ -46,11 +49,10 @@ func (o *OverviewModel) SetSize(w, h int) {
 }
 
 func (o OverviewModel) View() string {
-	if len(o.pods) == 0 && len(o.deployments) == 0 {
-		return lipgloss.NewStyle().
-			Foreground(colorDimText).
-			Padding(2, 4).
-			Render("Waiting for data...")
+	// An empty namespace used to sit on "Waiting for data..." forever;
+	// only show the spinner until the first fetch lands.
+	if !o.loaded {
+		return loadingView("Loading cluster data...")
 	}
 
 	// Responsive card widths
@@ -77,13 +79,11 @@ func (o OverviewModel) View() string {
 	cardsHeight := lipgloss.Height(cards)
 	remaining := o.height - cardsHeight - 4 // padding + tab bar
 
-	// Needs Attention section — only if there are issues and enough space
-	if remaining > 6 {
-		attention := o.renderAttention()
-		if attention != "" {
-			parts = append(parts, "", attention)
-			remaining -= lipgloss.Height(attention) + 1
-		}
+	// Needs Attention is the point of this tab, so it always renders, shrunk
+	// to the rows left (box chrome + title take 6).
+	if attention := o.renderAttention(remaining - 7); attention != "" {
+		parts = append(parts, "", attention)
+		remaining -= lipgloss.Height(attention) + 1
 	}
 
 	// High Memory section — pods/deployments near memory limit
@@ -199,159 +199,81 @@ func (o OverviewModel) renderDeploymentsCard(width int) string {
 }
 
 func (o OverviewModel) renderHealthCard(width int) string {
-	var lines []string
-	lines = append(lines, CardTitleStyle.Render("HEALTH"))
-	lines = append(lines, "")
-
-	// Count issues by type
-	crashLoop, imagePull, oomKilled, crashed, otherFailed := 0, 0, 0, 0, 0
-	for _, p := range o.pods {
-		switch p.Status {
-		case "CrashLoopBackOff":
-			crashLoop++
-		case "ImagePullBackOff", "ErrImagePull":
-			imagePull++
-		case "OOMKilled":
-			oomKilled++
-		case "Error", "Failed":
-			otherFailed++
-		}
-		if p.OOMKilled && p.Status != "OOMKilled" {
-			oomKilled++
-		}
-		if p.Crashed && p.Status != "Error" && p.Status != "Failed" {
-			crashed++
+	crit, warn := 0, 0
+	for _, iss := range o.issues() {
+		if iss.severity == issueCritical {
+			crit++
+		} else {
+			warn++
 		}
 	}
-
-	issueCount := crashLoop + imagePull + oomKilled + crashed + otherFailed
-	if issueCount == 0 {
-		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓ All healthy"))
-	} else {
-		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorRed).Render(
-			fmt.Sprintf("⚠ %d issue(s)", issueCount)))
-	}
-
-	lines = append(lines, "")
-
-	// Total restarts
 	var totalRestarts int32
 	for _, p := range o.pods {
 		totalRestarts += p.Restarts
 	}
-	if totalRestarts > 0 {
-		lines = append(lines, lipgloss.NewStyle().Foreground(colorYellow).Render(
-			fmt.Sprintf("↻ Restarts     %d", totalRestarts)))
-	} else {
-		lines = append(lines, lipgloss.NewStyle().Foreground(colorDimText).Render("↻ Restarts     0"))
+
+	// The headline takes the color of the worst issue, so the card alone
+	// says whether anything is on fire.
+	bold := lipgloss.NewStyle().Bold(true)
+	var headline string
+	switch {
+	case crit > 0:
+		headline = bold.Foreground(colorRed).Render(fmt.Sprintf("✗ %d critical", crit))
+	case warn > 0:
+		headline = bold.Foreground(colorYellow).Render(fmt.Sprintf("⚠ %d to watch", warn))
+	default:
+		headline = bold.Foreground(colorGreen).Render("✓ All healthy")
 	}
 
-	// Breakdown of issue types
-	if crashLoop > 0 {
-		lines = append(lines, StyleFailed.Render(fmt.Sprintf("⟳ CrashLoop    %d", crashLoop)))
+	lines := []string{CardTitleStyle.Render("HEALTH"), headline, ""}
+	if crit > 0 {
+		lines = append(lines, StyleFailed.Render("●")+fmt.Sprintf(" Critical     %d", crit))
 	}
-	if imagePull > 0 {
-		lines = append(lines, StyleFailed.Render(fmt.Sprintf("✗ ImagePull    %d", imagePull)))
+	if warn > 0 {
+		lines = append(lines, StylePending.Render("●")+fmt.Sprintf(" Warning      %d", warn))
 	}
-	if oomKilled > 0 {
-		lines = append(lines, StyleFailed.Render(fmt.Sprintf("✗ OOMKilled    %d", oomKilled)))
+	restarts := lipgloss.NewStyle().Foreground(colorDimText)
+	if totalRestarts > 0 {
+		restarts = restarts.Foreground(colorYellow)
 	}
-	if crashed > 0 {
-		lines = append(lines, StyleFailed.Render(fmt.Sprintf("⚡ Crashed      %d", crashed)))
-	}
+	lines = append(lines, restarts.Render(fmt.Sprintf("↻ Restarts     %d", totalRestarts)))
 
 	return CardStyle.Width(width).Render(strings.Join(lines, "\n"))
 }
 
 // --- Attention Section ---
 
-func (o OverviewModel) renderAttention() string {
-	type issue struct {
-		icon     string
-		kind     string // "pod" or "deploy"
-		name     string
-		reason   string
-		detail   string
-		severity int       // 0=critical, 1=warning
-		when     time.Time // when the issue (last) happened, zero if unknown
-	}
+const (
+	issueCritical = iota
+	issueWarning
+)
 
+// Pods sit in Pending/ContainerCreating for a few seconds on every rollout;
+// only the ones stuck longer than this are worth flagging.
+const pendingGrace = 2 * time.Minute
+
+type issue struct {
+	icon     string
+	kind     string // "pod" or "deploy"
+	name     string
+	reason   string
+	detail   string
+	severity int       // issueCritical or issueWarning
+	when     time.Time // when the issue (last) happened, zero if unknown
+}
+
+// issues lists everything that needs a human, critical first and most recent
+// first within each severity. The Health card and the attention list both
+// read from here so their counts always agree.
+func (o OverviewModel) issues() []issue {
 	var issues []issue
 	now := time.Now()
-
 	for _, p := range o.pods {
-		// Pod creation is the fallback "when" for issues without a
-		// termination timestamp — a pod stuck Pending or failing to pull
-		// has been a problem since it was created.
-		created := now.Add(-p.Age)
-
-		switch p.Status {
-		case "CrashLoopBackOff":
-			detail := fmt.Sprintf("%d restarts", p.Restarts)
-			issues = append(issues, issue{"⟳", "pod", p.Name, "CrashLoopBackOff", detail, 0, anyTermTime(p)})
-		case "OOMKilled":
-			detail := ""
-			if p.Resources.MemLim != "" {
-				detail = "limit: " + p.Resources.MemLim
-			}
-			t := termTime(p, true)
-			if !t.IsZero() {
-				if detail != "" {
-					detail += ", "
-				}
-				detail += "at " + formatTimestamp(t)
-			}
-			issues = append(issues, issue{"✗", "pod", p.Name, "OOMKilled", detail, 0, t})
-		case "ImagePullBackOff", "ErrImagePull":
-			detail := ""
-			if len(p.Containers) > 0 {
-				detail = p.Containers[0].Image
-			}
-			issues = append(issues, issue{"✗", "pod", p.Name, p.Status, detail, 0, created})
-		case "Error", "Failed":
-			t := anyTermTime(p)
-			if t.IsZero() {
-				t = created
-			}
-			issues = append(issues, issue{"✗", "pod", p.Name, p.Status, "", 0, t})
-		case "Pending", "ContainerCreating":
-			issues = append(issues, issue{"◌", "pod", p.Name, p.Status, "", 1, created})
-		}
-		// Detect recovered OOM (running but was OOMKilled)
-		if p.OOMKilled && p.Status == "Running" {
-			detail := fmt.Sprintf("recovered, %d restarts", p.Restarts)
-			if p.Resources.MemLim != "" {
-				detail += ", limit: " + p.Resources.MemLim
-			}
-			t := termTime(p, true)
-			if !t.IsZero() {
-				detail += ", at " + formatTimestamp(t)
-			}
-			issues = append(issues, issue{"⚡", "pod", p.Name, "OOMKilled (recovered)", detail, 1, t})
-		}
-		// Detect recovered crash (running but had non-zero exit)
-		if p.Crashed && p.Status == "Running" {
-			detail := fmt.Sprintf("recovered, %d restarts", p.Restarts)
-			for _, c := range p.Containers {
-				if c.LastTermCode != 0 && c.LastTermReason != "OOMKilled" {
-					detail = fmt.Sprintf("exit code %d, %d restarts", c.LastTermCode, p.Restarts)
-					break
-				}
-			}
-			t := termTime(p, false)
-			if !t.IsZero() {
-				detail += ", at " + formatTimestamp(t)
-			}
-			issues = append(issues, issue{"⚡", "pod", p.Name, "Crashed (recovered)", detail, 1, t})
-		}
+		issues = append(issues, podIssues(p, now)...)
 	}
-
-	// Under-replicated deployments
 	for _, d := range o.deployments {
-		if d.Available < d.Desired {
-			detail := fmt.Sprintf("%d/%d available", d.Available, d.Desired)
-			// Under-replication usually starts at the last rollout
-			issues = append(issues, issue{"▾", "deploy", d.Name, "Under-replicated", detail, 1, now.Add(-d.LastDeploy)})
+		if iss, ok := deploymentIssue(d, now); ok {
+			issues = append(issues, iss)
 		}
 	}
 
@@ -383,59 +305,172 @@ func (o OverviewModel) renderAttention() string {
 		}
 		if !alreadyListed {
 			issues = append(issues, issue{"↻", "pod", r.name,
-				fmt.Sprintf("%d restarts", r.restarts), "running but unstable", 1, r.when})
+				fmt.Sprintf("%d restarts", r.restarts), "running but unstable", issueWarning, r.when})
 		}
 	}
 
-	if len(issues) == 0 {
-		return ""
-	}
+	sortIssues(issues)
+	return issues
+}
 
-	// Sort: critical first, then warning; most recent first within each
-	// severity. Issues with no known timestamp sink to the bottom of their band.
+// sortIssues orders critical before warning, most recent first within each
+// band. Issues with no known timestamp sink to the bottom of their band.
+func sortIssues(issues []issue) {
 	sort.SliceStable(issues, func(i, j int) bool {
 		if issues[i].severity != issues[j].severity {
 			return issues[i].severity < issues[j].severity
 		}
 		return issues[i].when.After(issues[j].when)
 	})
+}
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorRed)
-	nameStyle := lipgloss.NewStyle().Foreground(colorWhite).Bold(true)
-	reasonStyle := lipgloss.NewStyle().Foreground(colorRed)
-	warnReasonStyle := lipgloss.NewStyle().Foreground(colorYellow)
-	detailStyle := lipgloss.NewStyle().Foreground(colorDimText)
-	tagStyle := lipgloss.NewStyle().
-		Foreground(colorDimText).
-		Bold(true)
+// podIssues returns what's wrong with a single pod, if anything.
+func podIssues(p k8s.PodInfo, now time.Time) []issue {
+	var issues []issue
+	// Pod creation is the fallback "when" for issues without a termination
+	// timestamp — a pod stuck Pending or failing to pull has been a problem
+	// since it was created.
+	created := now.Add(-p.Age)
 
-	var lines []string
-	lines = append(lines, titleStyle.Render("NEEDS ATTENTION"))
-	lines = append(lines, "")
+	switch p.Status {
+	case "CrashLoopBackOff":
+		detail := fmt.Sprintf("%d restarts", p.Restarts)
+		issues = append(issues, issue{"⟳", "pod", p.Name, "CrashLoopBackOff", detail, issueCritical, anyTermTime(p)})
+	case "OOMKilled":
+		detail := ""
+		if p.Resources.MemLim != "" {
+			detail = "limit " + p.Resources.MemLim
+		}
+		issues = append(issues, issue{"✗", "pod", p.Name, "OOMKilled", detail, issueCritical, termTime(p, true)})
+	case "ImagePullBackOff", "ErrImagePull":
+		detail := ""
+		if len(p.Containers) > 0 {
+			detail = p.Containers[0].Image
+		}
+		issues = append(issues, issue{"✗", "pod", p.Name, p.Status, detail, issueCritical, created})
+	case "Error", "Failed":
+		t := anyTermTime(p)
+		if t.IsZero() {
+			t = created
+		}
+		issues = append(issues, issue{"✗", "pod", p.Name, p.Status, "", issueCritical, t})
+	case "Pending", "ContainerCreating":
+		if p.Age >= pendingGrace {
+			issues = append(issues, issue{"◌", "pod", p.Name, p.Status, "stuck", issueWarning, created})
+		}
+	}
+	// Recovered OOM: running now, but was OOMKilled
+	if p.OOMKilled && p.Status == "Running" {
+		detail := fmt.Sprintf("%d restarts", p.Restarts)
+		if p.Resources.MemLim != "" {
+			detail += ", limit " + p.Resources.MemLim
+		}
+		issues = append(issues, issue{"⚡", "pod", p.Name, "OOMKilled (recovered)", detail, issueWarning, termTime(p, true)})
+	}
+	// Recovered crash: running now, but had a non-zero exit
+	if p.Crashed && p.Status == "Running" {
+		detail := fmt.Sprintf("%d restarts", p.Restarts)
+		for _, c := range p.Containers {
+			if c.LastTermCode != 0 && c.LastTermReason != "OOMKilled" {
+				detail = fmt.Sprintf("exit code %d, %d restarts", c.LastTermCode, p.Restarts)
+				break
+			}
+		}
+		issues = append(issues, issue{"⚡", "pod", p.Name, "Crashed (recovered)", detail, issueWarning, termTime(p, false)})
+	}
+	return issues
+}
 
-	for i, iss := range issues {
-		if i >= 10 {
-			lines = append(lines, detailStyle.Render(fmt.Sprintf("  +%d more...", len(issues)-10)))
-			break
+// deploymentIssue reports a deployment that has fewer available replicas
+// than desired.
+func deploymentIssue(d k8s.DeploymentInfo, now time.Time) (issue, bool) {
+	if d.Available >= d.Desired {
+		return issue{}, false
+	}
+	// Under-replication usually starts at the last rollout
+	var when time.Time
+	if d.LastDeploy > 0 {
+		when = now.Add(-d.LastDeploy)
+	}
+	detail := fmt.Sprintf("%d/%d available", d.Available, d.Desired)
+	if d.Available == 0 {
+		// Nothing serving at all is an outage, not a degradation
+		return issue{"✗", "deploy", d.Name, "Unavailable", detail, issueCritical, when}, true
+	}
+	return issue{"▾", "deploy", d.Name, "Under-replicated", detail, issueWarning, when}, true
+}
+
+// podMemPct returns a pod's memory usage as a percentage of its limit; ok is
+// false when there's no limit or no metrics sample.
+func podMemPct(p k8s.PodInfo, metrics map[string]k8s.PodMetrics) (pct float64, ok bool) {
+	m, found := metrics[p.Namespace+"/"+p.Name]
+	if !found || m.MemoryBytes == 0 || p.Resources.MemLimitBytes == 0 {
+		return 0, false
+	}
+	return float64(m.MemoryBytes) / float64(p.Resources.MemLimitBytes) * 100, true
+}
+
+// renderAttention draws the issue list as aligned columns (kind, name,
+// reason, age, detail), showing at most maxRows rows.
+func (o OverviewModel) renderAttention(maxRows int) string {
+	issues := o.issues()
+	if len(issues) == 0 {
+		return ""
+	}
+
+	nameW, reasonW := 0, 0
+	for _, iss := range issues {
+		nameW = max(nameW, lipgloss.Width(iss.name))
+		reasonW = max(reasonW, lipgloss.Width(iss.reason))
+	}
+	nameW = min(nameW, 48)
+
+	critStyle := lipgloss.NewStyle().Foreground(colorRed)
+	warnStyle := lipgloss.NewStyle().Foreground(colorYellow)
+	nameStyle := lipgloss.NewStyle().Foreground(colorWhite).Bold(true).Width(nameW)
+	dimStyle := lipgloss.NewStyle().Foreground(colorDimText)
+	tagStyle := dimStyle.Bold(true).Width(7)
+	ageStyle := dimStyle.Width(8).Align(lipgloss.Right)
+
+	// Box width minus border (2) and padding (6)
+	inner := max(o.width-14, 20)
+	limit := max(min(10, maxRows), 2)
+	shown := issues
+	if len(issues) > limit {
+		shown = issues[:limit-1] // leave a row for the "+N more" note
+	}
+
+	titleColor := colorYellow
+	if issues[0].severity == issueCritical {
+		titleColor = colorRed
+	}
+	lines := []string{lipgloss.NewStyle().Bold(true).Foreground(titleColor).Render("NEEDS ATTENTION"), ""}
+
+	now := time.Now()
+	for _, iss := range shown {
+		rs := critStyle
+		if iss.severity != issueCritical {
+			rs = warnStyle
 		}
-		rs := reasonStyle
-		if iss.severity > 0 {
-			rs = warnReasonStyle
+		age := ""
+		if !iss.when.IsZero() {
+			age = formatAge(now.Sub(iss.when)) + " ago"
 		}
-		tag := tagStyle.Render("[pod]")
-		if iss.kind == "deploy" {
-			tag = tagStyle.Render("[deployment]")
-		}
-		line := "  " + rs.Render(iss.icon) + " " + tag + " " + nameStyle.Render(iss.name) + "  " + rs.Render(iss.reason)
-		if iss.detail != "" {
-			line += "  " + detailStyle.Render(iss.detail)
-		}
-		lines = append(lines, line)
+		row := "  " + rs.Width(2).Render(iss.icon) + " " +
+			tagStyle.Render(iss.kind) +
+			nameStyle.Render(ansi.Truncate(iss.name, nameW, "…")) + "  " +
+			rs.Width(reasonW).Render(iss.reason) +
+			ageStyle.Render(age) + "  " +
+			dimStyle.Render(iss.detail)
+		lines = append(lines, ansi.Truncate(row, inner, "…"))
+	}
+	if len(shown) < len(issues) {
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("  +%d more...", len(issues)-len(shown))))
 	}
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorSubtle).
+		BorderForeground(titleColor).
 		Padding(1, 3).
 		Width(o.width - 6)
 
@@ -493,14 +528,8 @@ func (o OverviewModel) renderHighMemory() string {
 
 	// Check individual pods
 	for _, p := range o.pods {
-		key := p.Namespace + "/" + p.Name
-		m, ok := o.metrics[key]
-		if !ok || m.MemoryBytes == 0 || p.Resources.MemLimitBytes == 0 {
-			continue
-		}
-		pct := float64(m.MemoryBytes) / float64(p.Resources.MemLimitBytes) * 100
-		if pct >= 90 {
-			entries = append(entries, highMemEntry{"pod", p.Name, pct, m.Memory, p.Resources.MemLim})
+		if pct, ok := podMemPct(p, o.metrics); ok && pct >= 90 {
+			entries = append(entries, highMemEntry{"pod", p.Name, pct, o.metrics[p.Namespace+"/"+p.Name].Memory, p.Resources.MemLim})
 		}
 	}
 

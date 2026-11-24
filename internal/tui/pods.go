@@ -13,20 +13,22 @@ import (
 )
 
 type PodsModel struct {
-	pods         []k8s.PodInfo
-	filtered     []k8s.PodInfo // cached filter+sort result, rebuilt via refreshFiltered
-	longestName  int           // longest pod name, tracked so column sizing doesn't rescan per frame
-	metrics      map[string]k8s.PodMetrics
-	cursor       int
-	offset       int
-	width        int
-	height       int
-	allNS        bool
-	metricsAvail bool
-	filter       string
-	filtering    bool
-	sortCol      int  // index into sortable column names
-	sortAsc      bool // true = ascending
+	pods          []k8s.PodInfo
+	filtered      []k8s.PodInfo // cached filter+sort result, rebuilt via refreshFiltered
+	longestName   int           // longest pod name, tracked so column sizing doesn't rescan per frame
+	metrics       map[string]k8s.PodMetrics
+	cursor        int
+	offset        int
+	width         int
+	height        int
+	allNS         bool
+	metricsAvail  bool
+	filter        string
+	filtering     bool
+	sortCol       int  // index into sortable column names
+	sortAsc       bool // true = ascending
+	loaded        bool // false until the first fetch lands
+	metricsLoaded bool // false until the first metrics fetch lands
 }
 
 func NewPodsModel(allNS bool, metricsAvail bool) PodsModel {
@@ -37,6 +39,7 @@ func NewPodsModel(allNS bool, metricsAvail bool) PodsModel {
 }
 
 func (p *PodsModel) UpdatePods(pods []k8s.PodInfo) {
+	p.loaded = true
 	p.pods = pods
 	p.longestName = 0
 	for _, pod := range pods {
@@ -51,6 +54,7 @@ func (p *PodsModel) UpdatePods(pods []k8s.PodInfo) {
 }
 
 func (p *PodsModel) UpdateMetrics(m map[string]k8s.PodMetrics) {
+	p.metricsLoaded = true
 	p.metrics = m
 }
 
@@ -160,6 +164,9 @@ func (p *PodsModel) handleNav(msg tea.KeyPressMsg) {
 func (p PodsModel) View() string {
 	filtered := p.filtered
 
+	if !p.loaded {
+		return loadingView("Loading pods...")
+	}
 	if len(p.pods) == 0 {
 		return lipgloss.NewStyle().
 			Foreground(colorDimText).
@@ -344,6 +351,11 @@ func (p PodsModel) rowValues(cols []column, pod k8s.PodInfo) []string {
 	if p.metricsAvail {
 		memLim := pod.Resources.MemLim
 		memPct := memPctString(memBytes, pod.Resources.MemLimitBytes)
+		if !p.metricsLoaded {
+			// Usage comes from a separate, slower metrics call; the limit is
+			// already known from the pod spec.
+			cpu, mem, memPct = spinnerFrame, spinnerFrame, spinnerFrame
+		}
 		vals = append(vals, cpu, mem, memLim, memPct)
 	}
 

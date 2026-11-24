@@ -30,6 +30,7 @@ var (
 	allNamespaces bool
 	refreshSecs   int
 	theme         string
+	awsProfile    string
 )
 
 var rootCmd = &cobra.Command{
@@ -48,6 +49,7 @@ func init() {
 	rootCmd.Flags().StringVarP(&namespace, "namespace", "n", "", "Namespace to watch (default: kubeconfig default)")
 	rootCmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "Watch all namespaces")
 	rootCmd.Flags().IntVar(&refreshSecs, "refresh", 5, "Refresh interval in seconds")
+	rootCmd.Flags().StringVar(&awsProfile, "aws-profile", "", "AWS CLI profile for EKS authentication (overrides the kubeconfig's)")
 	rootCmd.Flags().StringVar(&theme, "theme", "github-dark", "Color theme (dracula, github-dark, everforest)")
 }
 
@@ -66,7 +68,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown theme %q, available: dracula, github-dark, everforest", theme)
 	}
 
-	client, err := k8s.NewClient(kubeconfig, kubeContext)
+	client, err := k8s.NewClient(kubeconfig, kubeContext, awsProfile)
 	if err != nil {
 		return fmt.Errorf("failed to create kubernetes client: %w", err)
 	}

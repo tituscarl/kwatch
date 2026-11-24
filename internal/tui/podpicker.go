@@ -116,7 +116,7 @@ func (p PodPickerModel) View() string {
 
 	if p.loading {
 		return lipgloss.JoinVertical(lipgloss.Left, "", title, hint, "",
-			lipgloss.NewStyle().Foreground(colorDimText).Padding(0, 2).Render("Loading pods..."))
+			lipgloss.NewStyle().Foreground(colorDimText).Padding(0, 2).Render(spinnerFrame+" Loading pods..."))
 	}
 
 	if len(p.pods) == 0 {
